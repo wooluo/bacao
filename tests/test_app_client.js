@@ -281,6 +281,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     querySelector: () => elemStub(),
     querySelectorAll: () => [],
     createElement: () => elemStub(),
+    addEventListener() {},
     body: { appendChild() {} },
   };
   const magicRef = new Proxy(function () {}, {

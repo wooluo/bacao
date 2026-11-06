@@ -434,6 +434,8 @@ async function clientVerdict(record, pid) {
   if (!model) throw new Error("未配置模型名，且无法从服务获取模型列表。请在设置里填写模型。");
   const dustLines = Bacao.dustLines(clientLedger(), record.item || "");
   const req = clientRequestBody(pcfg, model, record, dustLines, false, image ? [image] : null);
+  verdictBusy = true;
+  try {
   const { json } = await httpJSON("POST", req.url, req.headers, req.payload, 300000);
   let text = "";
   if (json && Array.isArray(json.choices) && json.choices[0]) {
@@ -444,6 +446,7 @@ async function clientVerdict(record, pid) {
   if (!text) throw new Error("模型未返回内容：" + JSON.stringify(json).slice(0, 160));
   saveClientVerdict(record, text);
   return text;
+  } finally { verdictBusy = false; }
 }
 
 // 流式（原生 StreamHttp 插件）：SSE 增量逐段回调 onDelta，结束/停止保存已生成部分
@@ -459,6 +462,7 @@ function clientVerdictStream(record, pid, onDelta) {
       let model = verdictModel(pcfg, !!image);
       if (!model) model = await resolveClientModel(pcfg);
       if (!model) { reject(new Error("未配置模型名，且无法从服务获取模型列表。请在设置里填写模型。")); return; }
+      verdictBusy = true;
       const dustLines = Bacao.dustLines(clientLedger(), record.item || "");
       const req = clientRequestBody(pcfg, model, record, dustLines, true, image ? [image] : null);
       const id = "s" + Date.now() + "-" + Math.floor(Math.random() * 1000);
@@ -470,6 +474,7 @@ function clientVerdictStream(record, pid, onDelta) {
         finished = true;
         cleanup();
         nativeStreamCancel = null;
+        verdictBusy = false;
         if (acc) saveClientVerdict(record, acc); // 停止也保留已生成部分
         if (err) reject(err);
         else if (!acc) reject(new Error("模型未返回内容"));
@@ -1599,4 +1604,22 @@ if (typeof window !== "undefined") {
   hooks.applyVerdictRecord = applyVerdictRecord;
   hooks.recordSummary = recordSummaryClient;
 }
+// ---------------- 数据自刷新 ----------------
+// 长时间停留的页面（如战报）在数据变化后不会自己更新：页面重新可见/窗口聚焦/点击当前页签时重取数据。
+// 判定流式进行中不打断，避免重渲染冲掉流式输出。
+let refreshTimer = null;
+let verdictBusy = false;
+
+function scheduleRefresh() {
+  if (verdictCtl || nativeStreamCancel || verdictBusy) return;
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => route(), 120);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) scheduleRefresh(); });
+window.addEventListener("focus", scheduleRefresh);
+$$(".topbar nav a").forEach((a) =>
+  a.addEventListener("click", () => {
+    if (location.hash === a.getAttribute("href")) scheduleRefresh(); // 同 hash 导航不触发 hashchange
+  }));
+
 detectMode().then(route);
