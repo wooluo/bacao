@@ -1,0 +1,13 @@
+{
+  "appId": "com.wooluo.bacao",
+  "appName": "工资拔草机",
+  "webDir": "www",
+  "backgroundColor": "#0c1b10",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true,
+    "adjustMarginsForEdgeToEdge": "force"
+  }
+}
