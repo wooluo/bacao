@@ -315,5 +315,32 @@ class TestPrompts(unittest.TestCase):
         self.assertNotIn("时薪", user)
 
 
+class TestScreenshot(unittest.TestCase):
+    IMG = "data:image/jpeg;base64,AAAA"
+
+    def test_has_image(self):
+        self.assertFalse(engine.has_image({"thumb": ""}))
+        self.assertFalse(engine.has_image({}))
+        self.assertTrue(engine.has_image({"thumb": self.IMG}))
+
+    def test_prompt_with_screenshot(self):
+        record = {"item": "键盘", "price": 899, "thumb": self.IMG}
+        system, user = engine.build_messages(record, 24, "salty", [])
+        # system 注入截图规则
+        self.assertIn("截图判定补充规则", system)
+        self.assertIn("以截图为准", system)
+        self.assertIn("不要编造", system)
+        # user 注入截图提示
+        self.assertIn("【附购物截图】", user)
+        # 人格语气仍在
+        self.assertIn("不允许人身羞辱", system)
+
+    def test_prompt_without_screenshot(self):
+        record = {"item": "键盘", "price": 899}
+        system, user = engine.build_messages(record, 24, "salty", [])
+        self.assertNotIn("截图判定补充规则", system)
+        self.assertNotIn("【附购物截图】", user)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

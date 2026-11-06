@@ -56,6 +56,14 @@ class StubLLM(BaseHTTPRequestHandler):
     def pop(cls):
         return cls.queue.pop(0) if cls.queue else (None, None)
 
+    @classmethod
+    def last_user_text(cls):
+        """最后请求的 user 文本（兼容多模态 content 数组）。"""
+        c = cls.last_request["messages"][1]["content"]
+        if isinstance(c, str):
+            return c
+        return "".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
+
     def do_POST(self):  # chat/completions (SSE)
         length = int(self.headers.get("Content-Length") or 0)
         StubLLM.last_request = json.loads(self.rfile.read(length))
@@ -326,6 +334,58 @@ class TestAPI(unittest.TestCase):
             self.assertEqual(appmod.resolve_model({"model": "手选模型"}), "手选模型")
         finally:
             appmod.fetch_models = orig
+
+    def test_13_screenshot_multimodal_chain(self):
+        # 配置识图模型 → 带截图过审 → 上游收到 content 数组 + 识图模型
+        self.post_json("/api/config", {"providers": {"glm": {"vision_model": "stub-vision"}}})
+        img = "data:image/jpeg;base64," + "A" * 200
+        thumb = "data:image/jpeg;base64," + "B" * 40
+        rec = self.post_json("/api/judge",
+                             {"item": "戴森吹风机", "price": 2999, "image": img, "thumb": thumb})["record"]
+        self.assertTrue(rec["has_image"])
+        self.assertEqual(rec["thumb"], thumb)
+        self.assertNotIn("image", rec, "对外返回的记录不应携带 AI 用大图")
+        StubLLM.push(PASS_VERDICT, "raw")
+        self.request("POST", "/api/verdict", {"id": rec["id"]})
+        body = StubLLM.last_request
+        self.assertEqual(body["model"], "stub-vision", "带截图应切换到识图模型")
+        content = body["messages"][1]["content"]
+        self.assertIsInstance(content, list)
+        img_parts = [p for p in content if p.get("type") == "image_url"]
+        self.assertEqual(len(img_parts), 1)
+        self.assertEqual(img_parts[0]["image_url"]["url"], img)
+        text = StubLLM.last_user_text()
+        self.assertIn("【附购物截图】", text)
+        self.assertIn("戴森吹风机", text)
+        self.assertIn("截图判定补充规则", body["messages"][0]["content"])
+        # 台账只持久化缩略图，大图不落盘
+        with open(appmod.LEDGER_PATH, encoding="utf-8") as f:
+            raw_ledger = f.read()
+        self.assertNotIn(img[:80], raw_ledger, "AI 用大图不能写进台账文件")
+        self.assertIn(thumb[:40], raw_ledger)
+        one = self.get_json("/api/ledger/" + rec["id"])["record"]
+        self.assertEqual(one["verdict"], "pass")
+        # 摘要带 has_image
+        summary = next(x for x in self.get_json("/api/ledger")["records"] if x["id"] == rec["id"])
+        self.assertTrue(summary["has_image"])
+        self.request("DELETE", "/api/ledger/" + rec["id"])
+        self.assertNotIn(rec["id"], appmod._IMAGE_CACHE, "删除后应清理截图缓存")
+
+    def test_14_screenshot_validation(self):
+        self.expect_400("POST", "/api/judge",
+                        {"item": "x", "price": 1, "image": "data:text/html;base64,AAAA"})
+        self.expect_400("POST", "/api/judge",
+                        {"item": "x", "price": 1, "image": "data:image/jpeg;base64," + "A" * 4000000})
+        self.expect_400("POST", "/api/judge",
+                        {"item": "x", "price": 1, "thumb": "not-a-dataurl"})
+
+    def test_15_verdict_without_image_keeps_text_content(self):
+        # 无截图时 user content 必须仍是纯字符串（兼容非多模态上游）
+        rec = self.post_json("/api/judge", {"item": "普通单", "price": 66})["record"]
+        self.request("POST", "/api/verdict", {"id": rec["id"]})
+        self.assertIsInstance(StubLLM.last_request["messages"][1]["content"], str)
+        self.assertNotIn("截图判定补充规则", StubLLM.last_request["messages"][0]["content"])
+        self.request("DELETE", "/api/ledger/" + rec["id"])
 
 
 if __name__ == "__main__":

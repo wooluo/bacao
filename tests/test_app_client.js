@@ -19,6 +19,7 @@ const PASS = { verdict: "pass", confidence: 25, reasons: [{ text: "刚需", stin
   questions: [], alternatives: ["等 618", "看二手"], saved_amount: 0 };
 
 let stubQueue = [];
+let stubLast = null;  // 最近一次 /chat/completions 请求体（断言 multimodal 载荷用）
 function stubNext() { return stubQueue.length ? stubQueue.shift() : { obj: WEED, style: "fence" }; }
 
 const stubServer = http.createServer((req, res) => {
@@ -32,6 +33,7 @@ const stubServer = http.createServer((req, res) => {
     req.on("data", (c) => (body += c));
     req.on("end", () => {
       const parsed = JSON.parse(body);
+      stubLast = parsed;
       assert.ok(parsed.messages.some((m) => m.role === "system" && m.content.includes("只输出一个 JSON 对象")),
         "请求必须携带判定系统提示词");
       const { obj, style } = stubNext();
@@ -200,10 +202,38 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const cfg1 = await LY.clientApi("/api/config");
   assert.strictEqual(cfg1.providers.glm.has_key, true);
   assert.strictEqual(cfg1.providers.glm.api_key, "");
-  await LY.clientApi("/api/config", { method: "POST", body: { providers: { glm: { model: "stub-model" } } } });
+  await LY.clientApi("/api/config", { method: "POST", body: { providers: { glm: { model: "stub-model", vision_model: "stub-vision" } } } });
   const rawCfg = JSON.parse(sb1.__mem.get("bacao.config"));
   assert.strictEqual(rawCfg.providers.glm.api_key, "TESTKEY123", "空 Key 不应覆盖已存 Key");
   console.log("✓ 离线配置 OK（Key 持久化且读取时脱敏）");
+
+  // 8) 购物截图（client 模式多模态）：judge 带图 → 直连判定走识图模型 + content 数组 → 大图不落 localStorage
+  stubQueue.push({ obj: WEED, style: "raw" });
+  const IMG = "data:image/jpeg;base64," + "A".repeat(200);
+  const THUMB = "data:image/jpeg;base64," + "B".repeat(40);
+  const rs = (await LY.clientApi("/api/judge",
+    { method: "POST", body: { item: "戴森吹风机", price: 2999, image: IMG, thumb: THUMB } })).record;
+  assert.strictEqual(rs.has_image, true);
+  assert.strictEqual(rs.thumb, THUMB);
+  assert.ok(!("image" in rs), "judge 返回不应携带 AI 用大图");
+  const storedShot = JSON.parse(sb1.__mem.get("bacao.ledger")).find((x) => x.id === rs.id);
+  assert.strictEqual(storedShot.thumb, THUMB);
+  assert.ok(!("image" in storedShot), "大图不应写入 localStorage");
+  await LY.clientVerdict(rs, "glm");
+  assert.strictEqual(stubLast.model, "stub-vision", "带截图应切换到识图模型");
+  const uc = stubLast.messages[1].content;
+  assert.ok(Array.isArray(uc), "带截图时 user content 应为数组");
+  assert.ok(uc.some((p) => p.type === "image_url" && p.image_url.url === IMG), "应携带 image_url");
+  assert.ok(uc.some((p) => p.type === "text" && p.text.includes("【附购物截图】")));
+  assert.ok(stubLast.messages[0].content.includes("截图判定补充规则"));
+  assert.strictEqual((await LY.clientApi("/api/ledger/" + rs.id)).record.verdict, "weed");
+  await LY.clientApi("/api/ledger/" + rs.id, { method: "DELETE" });
+  // 非法截图拒绝
+  try {
+    await LY.clientApi("/api/judge", { method: "POST", body: { item: "x", price: 1, image: "data:text/html;base64,AA" } });
+    assert.fail("非法截图应被拒绝");
+  } catch (e) { assert.ok(/截图/.test(e.message)); }
+  console.log("✓ 购物截图多模态判定 OK（识图模型 + content 数组 + 大图不落盘）");
 
   // ================= 沙箱 2：模拟安卓（Capacitor 原生 + StreamHttp 插件） =================
   // 即使 /api/config 返回 200 HTML 也必须判为离线（detectMode 防误判回归）

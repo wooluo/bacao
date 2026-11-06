@@ -161,6 +161,21 @@ assert.strictEqual(B.buildMessages({ item: "x", price: 1 }, 0, "mild", []).user.
 // 三人格共享判定逻辑（SYSTEM 部分一致）
 assert.strictEqual(B.personaSystem("mild").split("\n\n")[0], B.personaSystem("salty").split("\n\n")[0]);
 assert.ok(B.personaSystem("guardian").includes("辜负这个月"));
+
+// ---------------- 购物截图（多模态） ----------------
+assert.strictEqual(B.hasImage({ thumb: "" }), false);
+assert.strictEqual(B.hasImage({}), false);
+const IMG = "data:image/jpeg;base64,AAAA";
+assert.strictEqual(B.hasImage({ thumb: IMG }), true);
+const shotMsgs = B.buildMessages({ item: "键盘", price: 899, thumb: IMG }, 24, "salty", []);
+assert.ok(shotMsgs.system.includes("截图判定补充规则"), "system 应注入截图规则");
+assert.ok(shotMsgs.system.includes("以截图为准"));
+assert.ok(shotMsgs.user.includes("【附购物截图】"));
+assert.ok(shotMsgs.system.includes("不允许人身羞辱"), "人格语气仍在");
+const noShot = B.buildMessages({ item: "键盘", price: 899 }, 24, "salty", []);
+assert.strictEqual(noShot.system.includes("截图判定补充规则"), false);
+assert.strictEqual(noShot.user.includes("【附购物截图】"), false);
+console.log("✓ 购物截图提示词注入（规则块/用户提示/无图不受影响）");
 console.log("✓ 人格提示词（语气分离 / 安全红线 / 翻旧账注入）");
 
 console.log("\nengine.js 全部通过");

@@ -57,7 +57,7 @@ function defaultConfig() {
     provider: "glm", persona: "salty",
     salary: { monthly: 0, days: 21.75, hours_per_day: 8 },
     providers: {
-      glm: { label: "GLM 智谱（Coding Plan）", protocol: "openai", base: "https://open.bigmodel.cn/api/coding/paas/v4", model: "glm-5.3", api_key: "", fast: true }
+      glm: { label: "GLM 智谱（Coding Plan）", protocol: "openai", base: "https://open.bigmodel.cn/api/coding/paas/v4", model: "glm-5.3", vision_model: "glm-4.5v", api_key: "", fast: true }
     }
   };
 }
@@ -88,7 +88,7 @@ function applyConfigPatch(cfg, body) {
   Object.entries(body.providers || {}).forEach(([pid, p]) => {
     if (!p || typeof p !== "object" || !cfg.providers[pid]) return;
     const tgt = cfg.providers[pid];
-    ["label", "protocol", "base", "model"].forEach((k) => {
+    ["label", "protocol", "base", "model", "vision_model"].forEach((k) => {
       if (typeof p[k] === "string") tgt[k] = p[k].trim();
     });
     if (p.protocol !== "openai" && p.protocol !== "anthropic") tgt.protocol = "openai";
@@ -175,7 +175,51 @@ function recordSummaryClient(r) {
     cool_until: r.cool_until || "", parse_ok: !!r.parse_ok,
     hours_cost: r.hours_cost || 0, saved_amount: r.saved_amount || 0,
     dust_count: (r.dust_used || []).length,
+    has_image: !!r.thumb,
   };
+}
+
+// ---------------- 购物截图 ----------------
+// 前端压缩成两份：image（AI 识别用，≤1280px）与 thumb（台账展示，≤240px）
+const IMG_AI_MAX_CHARS = 3500000, IMG_THUMB_MAX_CHARS = 80000;
+const clientImageCache = {};  // 记录 id → AI 用大图 dataURL（内存，不落 localStorage）
+
+function readImageAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result));
+    fr.onerror = () => reject(new Error("读取截图失败"));
+    fr.readAsDataURL(file);
+  });
+}
+
+function downscale(dataUrl, maxSide, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const cv = document.createElement("canvas");
+      cv.width = w; cv.height = h;
+      cv.getContext("2d").drawImage(img, 0, 0, w, h);
+      resolve(cv.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => reject(new Error("截图解析失败（仅支持 png/jpg/webp）"));
+    img.src = dataUrl;
+  });
+}
+
+async function prepareScreenshot(file) {
+  if (!file || !/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
+    throw new Error("仅支持 png / jpg / webp 截图");
+  }
+  if (file.size > 8 * 1024 * 1024) throw new Error("截图太大（≤8MB），请截小一点");
+  const raw = await readImageAsDataURL(file);
+  const image = await downscale(raw, 1280, 0.8);   // AI 识别用
+  const thumb = await downscale(raw, 240, 0.6);    // 台账缩略图
+  if (image.length > IMG_AI_MAX_CHARS) throw new Error("截图压缩后仍过大，请换小一点的图");
+  return { image, thumb };
 }
 
 function clientHourly() {
@@ -209,6 +253,11 @@ async function clientApi(path, opts = {}) {
     const cfg = clientRawConfig();
     let persona = body.persona || cfg.persona || "salty";
     if (!Bacao.PERSONAS[persona]) persona = "salty";
+    const image = body.image || "";
+    const thumb = body.thumb || "";
+    const imgOk = (s, max) => !s || (s.length <= max && /^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/.test(s));
+    if (!imgOk(image, IMG_AI_MAX_CHARS)) throw new Error("截图格式不支持或过大（仅支持 png/jpg/webp）");
+    if (!imgOk(thumb, IMG_THUMB_MAX_CHARS)) throw new Error("缩略图数据异常");
     const ledger = clientLedger();
     const now = new Date();
     const record = {
@@ -223,7 +272,9 @@ async function clientApi(path, opts = {}) {
       reasons: [], questions: [], alternatives: [],
       saved_amount: 0, ai_text: "", parse_ok: false,
       outcome: "pending", outcome_at: "", cool_until: "",
+      thumb, has_image: !!thumb,
     };
+    if (image) clientImageCache[record.id] = image; // AI 用大图只留内存
     ledger.unshift(record);
     lsSet("bacao.ledger", ledger);
     return { record };
@@ -240,6 +291,7 @@ async function clientApi(path, opts = {}) {
   }
   if (m && method === "DELETE") {
     lsSet("bacao.ledger", clientLedger().filter((x) => x.id !== m[1]));
+    delete clientImageCache[m[1]];
     return { ok: true };
   }
   const mo = path.match(/^\/api\/ledger\/([\w-]+)\/outcome$/);
@@ -298,28 +350,47 @@ async function resolveClientModel(pcfg) {
   return model;
 }
 
-function clientRequestBody(pcfg, model, record, dustLines, stream) {
+function clientRequestBody(pcfg, model, record, dustLines, stream, images) {
   const msgs = Bacao.buildMessages(record, clientHourly(), record.persona || "salty", dustLines);
   const base = (pcfg.base || "").replace(/\/+$/, "");
+  const userContent = (images && images.length)
+    ? images.map((url) => ({ type: "image_url", image_url: { url } })).concat([{ type: "text", text: msgs.user }])
+    : msgs.user;
   let url, headers, payload;
   if (pcfg.protocol === "anthropic") {
     url = base + "/v1/messages";
     headers = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
     if (pcfg.api_key) { headers["x-api-key"] = pcfg.api_key; headers.Authorization = "Bearer " + pcfg.api_key; }
+    const acContent = (images && images.length)
+      ? images.map((u) => {
+          const m = String(u).match(/^data:image\/(\w+);base64,(.*)$/);
+          const media = m ? (m[1] === "jpg" ? "jpeg" : m[1]) : "jpeg";
+          return m ? { type: "image", source: { type: "base64", media_type: "image/" + media, data: m[2] } } : null;
+        }).filter(Boolean).concat([{ type: "text", text: msgs.user }])
+      : msgs.user;
     payload = { model, max_tokens: 2048, temperature: 0.7, stream: !!stream, system: msgs.system,
-                messages: [{ role: "user", content: msgs.user }] };
+                messages: [{ role: "user", content: acContent }] };
   } else {
     url = base + "/chat/completions";
     headers = { "Content-Type": "application/json" };
     if (pcfg.api_key) headers.Authorization = "Bearer " + pcfg.api_key;
     payload = { model, temperature: 0.7, stream: !!stream,
-                messages: [{ role: "system", content: msgs.system }, { role: "user", content: msgs.user }] };
+                messages: [{ role: "system", content: msgs.system }, { role: "user", content: userContent }] };
   }
-  // 快速模式：智谱系端点关闭深度思考，显著缩短等待
+  // 快速模式：智谱系端点关闭深度思考，显著缩短等待（识图模型同样适用）
   if (pcfg.fast && /bigmodel|z\.ai/i.test(pcfg.base || "")) {
     payload.thinking = { type: "disabled" };
   }
   return { url, headers, payload };
+}
+
+// 判定用模型：附截图 → 识图模型（vision_model，缺省退回主模型）
+function verdictModel(pcfg, withImage) {
+  if (withImage) {
+    const vm = String(pcfg.vision_model || "").trim();
+    if (vm) return vm;
+  }
+  return (pcfg.model || "").trim();
 }
 
 // 判定字段落账（与 app.py apply_verdict 同构）
@@ -357,10 +428,12 @@ function saveClientVerdict(record, raw) {
 async function clientVerdict(record, pid) {
   const pcfg = clientRawConfig().providers[pid];
   if (!pcfg) throw new Error("未知 provider：" + pid);
-  const model = await resolveClientModel(pcfg);
+  const image = clientImageCache[record.id] || "";
+  let model = verdictModel(pcfg, !!image);
+  if (!model) model = await resolveClientModel(pcfg);
   if (!model) throw new Error("未配置模型名，且无法从服务获取模型列表。请在设置里填写模型。");
   const dustLines = Bacao.dustLines(clientLedger(), record.item || "");
-  const req = clientRequestBody(pcfg, model, record, dustLines, false);
+  const req = clientRequestBody(pcfg, model, record, dustLines, false, image ? [image] : null);
   const { json } = await httpJSON("POST", req.url, req.headers, req.payload, 300000);
   let text = "";
   if (json && Array.isArray(json.choices) && json.choices[0]) {
@@ -382,10 +455,12 @@ function clientVerdictStream(record, pid, onDelta) {
       const plugin = nativeStreamHttp();
       const pcfg = clientRawConfig().providers[pid];
       if (!pcfg) { reject(new Error("未知 provider：" + pid)); return; }
-      const model = await resolveClientModel(pcfg);
+      const image = clientImageCache[record.id] || "";
+      let model = verdictModel(pcfg, !!image);
+      if (!model) model = await resolveClientModel(pcfg);
       if (!model) { reject(new Error("未配置模型名，且无法从服务获取模型列表。请在设置里填写模型。")); return; }
       const dustLines = Bacao.dustLines(clientLedger(), record.item || "");
-      const req = clientRequestBody(pcfg, model, record, dustLines, true);
+      const req = clientRequestBody(pcfg, model, record, dustLines, true, image ? [image] : null);
       const id = "s" + Date.now() + "-" + Math.floor(Math.random() * 1000);
       let acc = "", reason = "", finished = false;
       const handles = [];
@@ -673,7 +748,7 @@ async function renderHome() {
 }
 
 // ---------------- 过审页 ----------------
-let judgeForm = { item: "", price: "", why: "", source: "" };
+let judgeForm = { item: "", price: "", why: "", source: "", image: "", thumb: "" };
 
 async function renderJudge() {
   const cfg = await loadConfig();
@@ -691,6 +766,16 @@ async function renderJudge() {
       <textarea id="j-why" rows="2" maxlength="200" placeholder="例：直播间说最后 100 套 / 加班想要奖励自己">${esc(judgeForm.why)}</textarea>
       <label class="field">在哪看到的（可选）</label>
       <input type="text" id="j-source" maxlength="100" placeholder="例：抖音直播间 / 朋友晒图 / 京东首页">
+      <label class="field">购物截图（可选）<span class="warn">支持多模态识别</span></label>
+      <input type="file" id="j-file" accept="image/png,image/jpeg,image/webp" style="display:none">
+      <div class="img-pick" id="j-img-pick">
+        <button class="btn ghost small" id="j-pick">📸 附购物截图</button>
+        <span class="hint" style="margin-top:0">商品页 / 直播间 / 购物车都行——AI 会拆解截图里的价格与商家话术</span>
+      </div>
+      <div class="img-preview" id="j-img-preview" hidden>
+        <img id="j-thumb" alt="截图缩略图">
+        <div class="ip-meta"><span id="j-img-info"></span><br><button class="btn ghost small" id="j-img-del">✕ 移除截图</button></div>
+      </div>
       <div id="j-dust"></div>
       <div class="btn-row">
         <button class="btn primary big" id="j-go">📄 递交审批单 →</button>
@@ -700,6 +785,39 @@ async function renderJudge() {
 
   const itemEl = $("#j-item"), priceEl = $("#j-price"), whyEl = $("#j-why"), srcEl = $("#j-source");
   const conv = $("#j-convert"), dustBox = $("#j-dust");
+  const paintImg = () => {
+    const box = $("#j-img-preview");
+    if (judgeForm.thumb) {
+      box.hidden = false;
+      $("#j-img-pick").hidden = true;
+      $("#j-thumb").src = judgeForm.thumb;
+      $("#j-img-info").textContent = "截图已就绪（自动压缩，判定时随单发给 AI）";
+    } else {
+      box.hidden = true;
+      $("#j-img-pick").hidden = false;
+    }
+  };
+  $("#j-pick").addEventListener("click", () => $("#j-file").click());
+  $("#j-file").addEventListener("change", async () => {
+    const f = $("#j-file").files[0];
+    if (!f) return;
+    const btn = $("#j-pick");
+    btn.disabled = true; btn.textContent = "压缩截图…";
+    try {
+      const r = await prepareScreenshot(f);
+      judgeForm.image = r.image;
+      judgeForm.thumb = r.thumb;
+      paintImg();
+    } catch (e) { toast(e.message); }
+    finally {
+      btn.disabled = false; btn.textContent = "📸 附购物截图";
+      $("#j-file").value = "";
+    }
+  });
+  $("#j-img-del").addEventListener("click", () => {
+    judgeForm.image = ""; judgeForm.thumb = "";
+    paintImg();
+  });
   const refresh = () => {
     const p = Number(judgeForm.price);
     if (p > 0) {
@@ -722,6 +840,7 @@ async function renderJudge() {
   whyEl.addEventListener("input", () => { judgeForm.why = whyEl.value; });
   srcEl.addEventListener("input", () => { judgeForm.source = srcEl.value; });
   refresh();
+  paintImg();
 
   $("#j-go").addEventListener("click", async () => {
     const btn = $("#j-go");
@@ -736,9 +855,11 @@ async function renderJudge() {
           price: Number(judgeForm.price),
           why: judgeForm.why.trim(),
           source: judgeForm.source.trim(),
+          image: judgeForm.image || undefined,
+          thumb: judgeForm.thumb || undefined,
         },
       });
-      judgeForm = { item: "", price: "", why: "", source: "" };
+      judgeForm = { item: "", price: "", why: "", source: "", image: "", thumb: "" };
       location.hash = "#/record/" + data.record.id + "/auto";
     } catch (e) {
       toast(e.message);
@@ -777,6 +898,7 @@ async function renderRecord(id, auto) {
         ${record.why ? "申请理由：" + esc(record.why) + "<br>" : ""}
         ${record.source ? "种草来源：" + esc(record.source) : ""}
       </div>` : ""}
+      ${record.thumb ? `<div class="img-attach"><img src="${esc(record.thumb)}" alt="购物截图"><span class="tag gold">📎 附购物截图 · AI 已识图</span></div>` : ""}
       ${dustNames ? `<div class="meta-row">📂 本次过审已翻你的旧账（${dustNames} 条吃灰记录）</div>` : ""}
       <div id="stamp-slot"></div>
     </div>
@@ -1304,6 +1426,8 @@ async function renderSettings() {
           <label class="field">模型名 <span style="font-weight:400">（可下拉选择或手动输入）</span></label>
           <select data-f="model_select" hidden></select>
           <input type="text" data-f="model" value="${esc(p.model)}" placeholder="如 glm-5.3" style="margin-top:8px">
+          <label class="field">识图模型 <span style="font-weight:400">（购物截图判定用，如 glm-4.5v / glm-4v-flash）</span></label>
+          <input type="text" data-f="vision_model" value="${esc(p.vision_model || "")}" placeholder="如 glm-4.5v" style="margin-top:8px">
           <label class="chk-line"><input type="checkbox" data-f="fast" ${p.fast ? "checked" : ""}> 快速模式（关闭深度思考，GLM 出结果更快）</label>
           <div class="btn-row">
             <button class="btn small ghost" data-fetchmodels="${pid}">获取模型列表</button>
@@ -1321,6 +1445,7 @@ async function renderSettings() {
         · 当前运行：<b>${MODE === "server" ? "服务器模式（连本机服务，流式输出）" : "离线模式（App 内引擎，直连 AI）"}</b><br>
         · <b>GLM 智谱（Coding Plan）</b>：到 open.bigmodel.cn 用<b>开通了 Coding Plan 的账号</b>创建「Coding Plan 类型」API Key 粘贴到上方；个人类型 Key 会报 429 余额不足。模型默认 glm-5.3，建议保持开启「快速模式」。<br>
         · 判定依据：时薪换算、吃灰概率、家里已有类似物、商家话术、分期利息成本、二手残值。三档结论（拔草/冷静/放行）都会真实出现。<br>
+        · 附购物截图时用「识图模型」判定（默认 glm-4.5v）：AI 会拆解截图里的价格、优惠与话术；截图与手填价格冲突以截图为准。截图自动压缩，台账只存缩略图。<br>
         · 本工具为娱乐性理性消费辅助，判定由 AI 生成仅供参考，请根据自己的实际财务状况决策。禁止极端抠门，该买的刚需要放行。<br>
         · 数据（工资、台账）只保存在本机${MODE === "server" ? "（data/ 目录）" : "（浏览器本地存储）"}。
       </div>
@@ -1414,7 +1539,8 @@ async function renderSettings() {
         if (!el) return undefined;
         return el.type === "checkbox" ? el.checked : el.value.trim();
       };
-      const p = { base: get("base") || "", protocol: get("protocol") || "openai", model: get("model") || "" };
+      const p = { base: get("base") || "", protocol: get("protocol") || "openai",
+                  model: get("model") || "", vision_model: get("vision_model") || "" };
       if (get("fast") !== undefined) p.fast = get("fast");
       const key = get("api_key");
       if (key) p.api_key = key;

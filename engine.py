@@ -539,9 +539,25 @@ def dust_lines(ledger, item, limit=3):
 
 # ---------------------------------------------------------------- 提示词构建
 
-def persona_system(persona_id):
+_SYSTEM_SCREENSHOT = """
+
+截图判定补充规则：
+- 用户可能附上购物页/直播间/购物车/订单截图。请先从截图提取关键信息：商品名、标价与到手价、优惠方式（满减/券/限时倒计时/限量 N 件/已售 N 件/直播间氛围），再套用上面的判定逻辑。
+- 把截图里的商家话术当作判定取材重点：倒计时与「仅剩 X 件」是稀缺话术，划线原价是锚定价话术，「已售 10 万+」是从众话术——逐条拆解。
+- 截图与用户填写的信息冲突时（如价格不一致），以截图为准，并在理由中明确点出这个矛盾。
+- 若截图模糊或关键信息（价格）不可见，在理由中如实说明「截图未见价格」，不要编造。"""
+
+_USER_SCREENSHOT_NOTE = "【附购物截图】已随本单提交。请先读取截图里的商品名、价格与优惠话术再判定；截图与上面填写的信息冲突时以截图为准。"
+
+
+def has_image(record):
+    """记录是否附带购物截图。"""
+    return bool(record.get("thumb")) if isinstance(record, dict) else False
+
+
+def persona_system(persona_id, screenshot=False):
     tone = _PERSONA_TONE.get(persona_id) or _PERSONA_TONE["salty"]
-    return _SYSTEM_LOGIC + "\n\n" + tone
+    return _SYSTEM_LOGIC + (_SYSTEM_SCREENSHOT if screenshot else "") + "\n\n" + tone
 
 
 def build_messages(record, salary, persona_id, dust=None):
@@ -549,6 +565,7 @@ def build_messages(record, salary, persona_id, dust=None):
     hourly = float(salary or 0)
     price = _price_of(record)
     h_text = hours_text(price, hourly)
+    img = has_image(record)
     parts = ["【想买的东西】%s" % record.get("item", ""),
              "【价格】¥%s" % _fmt_num(price)]
     why = str(record.get("why") or "").strip()
@@ -561,5 +578,7 @@ def build_messages(record, salary, persona_id, dust=None):
             parts.append("【这笔钱相当于】%s" % h_text)
     if dust:
         parts.append("【历史吃灰提醒·翻旧账】\n" + "\n".join("- " + d for d in dust))
+    if img:
+        parts.append(_USER_SCREENSHOT_NOTE)
     parts.append("请直接输出判定 JSON。")
-    return persona_system(persona_id), "\n".join(parts)
+    return persona_system(persona_id, img), "\n".join(parts)

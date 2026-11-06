@@ -452,14 +452,30 @@ function dustLines(ledger, item, limit) {
 
 // ---------------- 提示词构建 ----------------
 
-function personaSystem(personaId) {
-  return SYSTEM_LOGIC + "\n\n" + (PERSONA_TONE[personaId] || PERSONA_TONE.salty);
+const SYSTEM_SCREENSHOT = `
+
+截图判定补充规则：
+- 用户可能附上购物页/直播间/购物车/订单截图。请先从截图提取关键信息：商品名、标价与到手价、优惠方式（满减/券/限时倒计时/限量 N 件/已售 N 件/直播间氛围），再套用上面的判定逻辑。
+- 把截图里的商家话术当作判定取材重点：倒计时与「仅剩 X 件」是稀缺话术，划线原价是锚定价话术，「已售 10 万+」是从众话术——逐条拆解。
+- 截图与用户填写的信息冲突时（如价格不一致），以截图为准，并在理由中明确点出这个矛盾。
+- 若截图模糊或关键信息（价格）不可见，在理由中如实说明「截图未见价格」，不要编造。`;
+
+const USER_SCREENSHOT_NOTE = "【附购物截图】已随本单提交。请先读取截图里的商品名、价格与优惠话术再判定；截图与上面填写的信息冲突时以截图为准。";
+
+function hasImage(record) {
+  return !!(record && record.thumb);
+}
+
+function personaSystem(personaId, screenshot) {
+  return SYSTEM_LOGIC + (screenshot ? SYSTEM_SCREENSHOT : "") + "\n\n" +
+    (PERSONA_TONE[personaId] || PERSONA_TONE.salty);
 }
 
 function buildMessages(record, salary, personaId, dust) {
   const hourly = Number(salary) || 0;
   const price = priceOf(record);
   const hText = hoursText(price, hourly);
+  const img = hasImage(record);
   const parts = [
     "【想买的东西】" + (record.item || ""),
     "【价格】¥" + fmtNum(price),
@@ -473,8 +489,9 @@ function buildMessages(record, salary, personaId, dust) {
   if (dust && dust.length) {
     parts.push("【历史吃灰提醒·翻旧账】\n" + dust.map((d) => "- " + d).join("\n"));
   }
+  if (img) parts.push(USER_SCREENSHOT_NOTE);
   parts.push("请直接输出判定 JSON。");
-  return { system: personaSystem(personaId), user: parts.join("\n") };
+  return { system: personaSystem(personaId, img), user: parts.join("\n") };
 }
 
 // ---------------- 导出 ----------------
@@ -486,7 +503,7 @@ const Bacao = {
   hourlyWage, hoursFor, hoursText,
   stripFence, extractObject, repairJson, normalizeVerdict, parseVerdict, parsePartial, autoclose,
   priceOf, stats, coolingDue, coolingUntil, markOutcome, manualVerdict,
-  dustMatches, dustLines, personaSystem, buildMessages,
+  dustMatches, dustLines, personaSystem, buildMessages, hasImage,
 };
 
 global.Bacao = Bacao;

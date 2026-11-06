@@ -45,10 +45,16 @@ DEFAULT_CONFIG = {
         "glm": {
             "label": "GLM 智谱（Coding Plan）", "protocol": "openai",
             "base": "https://open.bigmodel.cn/api/coding/paas/v4", "model": "glm-5.3",
+            "vision_model": "glm-4.5v",  # 购物截图判定用（识图模型）
             "api_key": "", "fast": True,
         },
     },
 }
+
+# 过审截图缓存：judge 时暂存 AI 用大图（台账只持久化缩略图），verdict 后保留供重新过审
+_IMAGE_CACHE = {}
+_IMAGE_MAX_CHARS = 3_500_000   # dataURL base64 上限（约 2.5MB 原图）
+_THUMB_MAX_CHARS = 80_000      # 缩略图上限
 
 
 # ---------------------------------------------------------------- 存取工具
@@ -86,7 +92,7 @@ def load_config():
             salary[k] = v
     for pid, p in (cfg.get("providers") or {}).items():
         if pid in out["providers"] and isinstance(p, dict):
-            for k in ("label", "protocol", "base", "model"):
+            for k in ("label", "protocol", "base", "model", "vision_model"):
                 if isinstance(p.get(k), str):
                     out["providers"][pid][k] = p[k]
             if isinstance(p.get("fast"), bool):
@@ -97,6 +103,7 @@ def load_config():
             out["providers"][pid] = {
                 "label": p.get("label") or pid, "protocol": p.get("protocol") or "openai",
                 "base": p.get("base") or "", "model": p.get("model") or "",
+                "vision_model": p.get("vision_model") or "",
                 "api_key": p.get("api_key") or "", "fast": bool(p.get("fast"))}
     if out["provider"] not in out["providers"]:
         out["provider"] = "glm"
@@ -144,6 +151,7 @@ def record_summary(r):
         "cool_until": r.get("cool_until", ""), "parse_ok": r.get("parse_ok", False),
         "hours_cost": r.get("hours_cost", 0), "saved_amount": r.get("saved_amount") or 0,
         "dust_count": len(r.get("dust_used") or []),
+        "has_image": bool(r.get("thumb")),
     }
 
 
@@ -203,7 +211,35 @@ def resolve_model(pcfg):
     return pool[0] if pool else ""
 
 
-def open_upstream(pcfg, model, system, user):
+def _openai_content(user, images):
+    """OpenAI 协议多模态 content：文本 + image_url（dataURL）。"""
+    if not images:
+        return user
+    parts = []
+    for url in images:
+        parts.append({"type": "image_url", "image_url": {"url": url}})
+    parts.append({"type": "text", "text": user})
+    return parts
+
+
+def _anthropic_content(user, images):
+    """Anthropic 协议多模态 content blocks。"""
+    if not images:
+        return user
+    blocks = []
+    for url in images:
+        m = re.match(r"^data:image/(\w+);base64,(.*)$", url, re.S)
+        if not m:
+            continue
+        media = "jpeg" if m.group(1) in ("jpg", "jpeg") else m.group(1)
+        blocks.append({"type": "image",
+                       "source": {"type": "base64", "media_type": "image/" + media,
+                                  "data": m.group(2)}})
+    blocks.append({"type": "text", "text": user})
+    return blocks
+
+
+def open_upstream(pcfg, model, system, user, images=None):
     base = (pcfg.get("base") or "").rstrip("/")
     key = pcfg.get("api_key") or ""
     if pcfg.get("protocol") == "anthropic":
@@ -214,7 +250,7 @@ def open_upstream(pcfg, model, system, user):
             headers["Authorization"] = "Bearer " + key
         payload = {"model": model, "max_tokens": 2048, "temperature": 0.7,
                    "system": system, "stream": True,
-                   "messages": [{"role": "user", "content": user}]}
+                   "messages": [{"role": "user", "content": _anthropic_content(user, images)}]}
     else:
         url = base + "/chat/completions"
         headers = {"Content-Type": "application/json"}
@@ -222,8 +258,8 @@ def open_upstream(pcfg, model, system, user):
             headers["Authorization"] = "Bearer " + key
         payload = {"model": model, "temperature": 0.7, "stream": True,
                    "messages": [{"role": "system", "content": system},
-                                {"role": "user", "content": user}]}
-    # 快速模式：智谱系端点关闭深度思考，显著缩短等待
+                                {"role": "user", "content": _openai_content(user, images)}]}
+    # 快速模式：智谱系端点关闭深度思考，显著缩短等待（识图模型同样适用）
     if pcfg.get("fast") and re.search(r"(bigmodel|z\.ai)", base):
         payload["thinking"] = {"type": "disabled"}
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
@@ -276,6 +312,15 @@ def iter_deltas(resp):
 
 # ---------------------------------------------------------------- 业务逻辑
 
+def _valid_image(dataurl, max_chars):
+    """校验图片 dataURL；合法返回 True。"""
+    if not isinstance(dataurl, str) or not dataurl:
+        return False
+    if len(dataurl) > max_chars:
+        return False
+    return bool(re.match(r"^data:image/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$", dataurl))
+
+
 def new_record(body, cfg, ledger):
     """过审申请 → 台账新记录（判定前）。校验失败抛 ValueError。"""
     item = str(body.get("item") or "").strip()
@@ -295,6 +340,14 @@ def new_record(body, cfg, ledger):
     persona = body.get("persona") or cfg.get("persona") or "salty"
     if persona not in engine.PERSONAS:
         persona = "salty"
+    image = body.get("image")
+    thumb = body.get("thumb") or ""
+    if image is not None and not _valid_image(image, _IMAGE_MAX_CHARS):
+        raise ValueError("截图格式不支持或过大（仅支持 png/jpg/webp，≤2.5MB）")
+    if thumb and not _valid_image(thumb, _THUMB_MAX_CHARS):
+        raise ValueError("缩略图数据异常")
+    if image and not thumb:
+        thumb = image  # 未提供缩略图时兜底（不推荐，仅避免截图无处展示）
     dust = engine.dust_lines(ledger, item)
     rid = datetime.now().strftime("%Y%m%d%H%M%S") + "-%04d" % random.randint(0, 9999)
     created = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -310,6 +363,7 @@ def new_record(body, cfg, ledger):
         "reasons": [], "questions": [], "alternatives": [],
         "saved_amount": 0, "ai_text": "", "parse_ok": False,
         "outcome": "pending", "outcome_at": "", "cool_until": "",
+        "thumb": thumb, "has_image": bool(thumb),
     }, dust
 
 
@@ -357,7 +411,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0 or length > 1 << 20:
+        if length <= 0:
+            return {}
+        if length > 8 << 20:  # 上限 8MB（带截图的请求较大）；超限需排空，否则客户端断管
+            remaining = length
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 1 << 20))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
             return {}
         try:
             return json.loads(self.rfile.read(length).decode("utf-8"))
@@ -463,6 +525,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "记录不存在"}, 404)
                 return
             save_ledger(remain)
+        _IMAGE_CACHE.pop(rid, None)
         self._send_json({"ok": True})
 
     # ---------- 业务 ----------
@@ -489,7 +552,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(p, dict) or pid not in cfg["providers"]:
                     continue
                 tgt = cfg["providers"][pid]
-                for k in ("label", "protocol", "base", "model"):
+                for k in ("label", "protocol", "base", "model", "vision_model"):
                     if isinstance(p.get(k), str):
                         tgt[k] = p[k].strip()
                 if p.get("protocol") not in ("openai", "anthropic"):
@@ -511,6 +574,8 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as e:
             self._send_json({"error": str(e)}, 400)
             return
+        if body.get("image"):
+            _IMAGE_CACHE[record["id"]] = body["image"]  # AI 用大图只留在内存
         with _LOCK:
             ledger = load_ledger()
             ledger.insert(0, record)
@@ -542,14 +607,20 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         salary = hourly_of(cfg)
+        image = _IMAGE_CACHE.get(rid)
         system, user = engine.build_messages(record, salary, record.get("persona") or cfg.get("persona"), dust_lines)
+        # 附截图时用识图模型（vision_model），未配置则退回主模型
         model = resolve_model(pcfg)
+        if image:
+            vmodel = (pcfg.get("vision_model") or "").strip()
+            if vmodel:
+                model = vmodel
         if not model:
             self._send_json({"error": "未配置模型名，且无法从 %s 获取模型列表。请在设置里填写模型。"
                                       % pcfg.get("label", pid)}, 502)
             return
         try:
-            resp = open_upstream(pcfg, model, system, user)
+            resp = open_upstream(pcfg, model, system, user, images=[image] if image else None)
         except urllib.error.HTTPError as e:
             try:
                 detail = e.read().decode("utf-8", "replace")[:400]
