@@ -64,18 +64,29 @@ class StubLLM(BaseHTTPRequestHandler):
             return c
         return "".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
 
-    def do_POST(self):  # chat/completions (SSE)
+    def do_POST(self):  # chat/completions（SSE 或整段 JSON）
         length = int(self.headers.get("Content-Length") or 0)
         StubLLM.last_request = json.loads(self.rfile.read(length))
         obj, style = self.pop()
         if obj is None:
             obj, style = WEED_VERDICT, "fence"
-        if style == "fence":
-            text = "好的，我的判定如下：\n```json\n" + json.dumps(obj, ensure_ascii=False) + "\n```\n请冷静。"
+        if style == "text":  # 纯文本（管家点评等非 JSON 用途）
+            text = str(obj)
         elif style == "raw":
             text = json.dumps(obj, ensure_ascii=False)
-        else:  # bad：无法解析
+        elif style == "bad":
             text = "这东西吧……我觉得你还是再想想，我说不清。反正别买。"
+        else:
+            text = "好的，我的判定如下：\n```json\n" + json.dumps(obj, ensure_ascii=False) + "\n```\n请冷静。"
+        if style == "text" or StubLLM.last_request.get("stream") is False:
+            # 整段 JSON 响应（/api/review 等非流式调用）
+            body = json.dumps({"choices": [{"message": {"content": text}}]}, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -386,6 +397,35 @@ class TestAPI(unittest.TestCase):
         self.assertIsInstance(StubLLM.last_request["messages"][1]["content"], str)
         self.assertNotIn("截图判定补充规则", StubLLM.last_request["messages"][0]["content"])
         self.request("DELETE", "/api/ledger/" + rec["id"])
+
+    def test_16_review_month_and_all(self):
+        # 月度点评：非流式整段返回，提示词带数据摘要 + 人格语气
+        StubLLM.push("「守门员」本月你干得漂亮，守住了一大笔军费。继续保持。", "text")
+        out = json.loads(self.request("POST", "/api/review", {"scope": "month"}))
+        self.assertIn("守门员", out["text"])
+        self.assertTrue(out["model"])
+        body = StubLLM.last_request
+        self.assertIs(body.get("stream"), False)
+        self.assertIn("趣味称号", body["messages"][0]["content"])
+        self.assertIn("禁止推荐任何借贷", body["messages"][0]["content"])
+        user = body["messages"][1]["content"]
+        self.assertIn("评语范围", user)
+        self.assertIn("守住 ¥", user)
+        self.assertNotIn("判定 JSON", user)
+        # 年度总评：带累计数据与月度走势
+        StubLLM.push("「时光守门员」全年表现稳健。", "text")
+        out = json.loads(self.request("POST", "/api/review", {"scope": "all"}))
+        self.assertIn("时光守门员", out["text"])
+        user = StubLLM.last_request["messages"][1]["content"]
+        self.assertIn("年度总评", user)
+        self.assertIn("月度走势", user)
+        # 空月份 400 / 非法 scope 400
+        try:
+            self.request("POST", "/api/review", {"scope": "month", "month": "1999-01"})
+            self.fail("空月份应当 400")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 400)
+        self.expect_400("POST", "/api/review", {"scope": "week"})
 
 
 if __name__ == "__main__":

@@ -34,11 +34,12 @@ const stubServer = http.createServer((req, res) => {
     req.on("end", () => {
       const parsed = JSON.parse(body);
       stubLast = parsed;
-      assert.ok(parsed.messages.some((m) => m.role === "system" && m.content.includes("只输出一个 JSON 对象")),
-        "请求必须携带判定系统提示词");
+      assert.ok(parsed.messages.some((m) => m.role === "system" && m.content),
+        "请求必须携带系统提示词");
       const { obj, style } = stubNext();
       let text;
       if (style === "bad") text = "这东西吧……我说不清。反正别买。";
+      else if (style === "plain") text = String(obj);
       else if (style === "raw") text = JSON.stringify(obj);
       else text = "我的判定：\n```json\n" + JSON.stringify(obj) + "\n```\n请冷静。";
       if (parsed.stream === false) {  // 浏览器非流式路径：整段 JSON
@@ -234,6 +235,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     assert.fail("非法截图应被拒绝");
   } catch (e) { assert.ok(/截图/.test(e.message)); }
   console.log("✓ 购物截图多模态判定 OK（识图模型 + content 数组 + 大图不落盘）");
+
+  // 8.5) 管家点评（client 模式）：非流式直连 → 整段文本 + 本地缓存
+  stubQueue.push({ obj: "「守门员」本月表现堪称教科书级防守。", style: "plain" });
+  const rv = await LY.clientApi("/api/review", { method: "POST", body: { scope: "month" } });
+  assert.ok(rv.text.includes("守门员"), "应返回点评文本");
+  assert.ok(stubLast.messages[0].content.includes("趣味称号"));
+  assert.ok(stubLast.messages[1].content.includes("评语范围"));
+  assert.strictEqual(stubLast.stream, false);
+  console.log("✓ 管家点评 OK（非流式整段返回，提示词带数据摘要）");
 
   // ================= 沙箱 2：模拟安卓（Capacitor 原生 + StreamHttp 插件） =================
   // 即使 /api/config 返回 200 HTML 也必须判为离线（detectMode 防误判回归）

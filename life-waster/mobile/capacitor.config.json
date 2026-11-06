@@ -1,0 +1,13 @@
+{
+  "appId": "com.wooluo.lifewaster",
+  "appName": "人生虚度记录仪",
+  "webDir": "www",
+  "backgroundColor": "#131318",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true,
+    "adjustMarginsForEdgeToEdge": "force"
+  }
+}

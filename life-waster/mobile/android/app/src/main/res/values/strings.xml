@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">人生虚度记录仪</string>
+    <string name="title_activity_main">人生虚度记录仪</string>
+    <string name="package_name">com.wooluo.lifewaster</string>
+    <string name="custom_url_scheme">com.wooluo.lifewaster</string>
+</resources>

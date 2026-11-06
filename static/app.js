@@ -162,6 +162,53 @@ async function fetchModelsDirect(pcfg) {
 
 const NON_CHAT_MODEL = /embed|rerank|ocr|whisper|speech|tts|stt|audio|clip/i;
 
+// 普通文本请求（无多模态、无需台账记录）：管家点评等
+function providerPlainRequest(pcfg, model, system, user, stream) {
+  const base = (pcfg.base || "").replace(/\/+$/, "");
+  let url, headers, payload;
+  if (pcfg.protocol === "anthropic") {
+    url = base + "/v1/messages";
+    headers = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
+    if (pcfg.api_key) { headers["x-api-key"] = pcfg.api_key; headers.Authorization = "Bearer " + pcfg.api_key; }
+    payload = { model, max_tokens: 2048, temperature: 0.8, stream: !!stream, system,
+                messages: [{ role: "user", content: user }] };
+  } else {
+    url = base + "/chat/completions";
+    headers = { "Content-Type": "application/json" };
+    if (pcfg.api_key) headers.Authorization = "Bearer " + pcfg.api_key;
+    payload = { model, temperature: 0.8, stream: !!stream,
+                messages: [{ role: "system", content: system }, { role: "user", content: user }] };
+  }
+  if (pcfg.fast && /bigmodel|z\.ai/i.test(pcfg.base || "")) payload.thinking = { type: "disabled" };
+  return { url, headers, payload };
+}
+
+function extractText(json) {
+  if (json && Array.isArray(json.choices) && json.choices[0]) {
+    return (json.choices[0].message || {}).content || "";
+  }
+  if (json && Array.isArray(json.content)) {
+    return json.content.map((b) => (b && b.text) || "").join("");
+  }
+  return "";
+}
+
+// ---------------- 管家点评存储（两种模式都存浏览器本地） ----------------
+function reviewKey(scope, m, st) {
+  return scope === "all"
+    ? "all:" + (st.judged_total || 0) + ":" + (st.total_saved || 0) + ":" + (st.dust_count || 0)
+    : "month:" + m.month + ":" + m.judged + ":" + m.saved + ":" + m.persuaded + ":" + m.dust;
+}
+function reviewGet(key) {
+  const s = lsGet("bacao.reviews", {});
+  return s[key] || null;
+}
+function reviewSet(key, text, model) {
+  const s = lsGet("bacao.reviews", {});
+  s[key] = { text, model: model || "", at: Bacao.fmtNow() };
+  lsSet("bacao.reviews", s);
+}
+
 // ---------------- 离线（client）模式 API ----------------
 
 function clientLedger() { return lsGet("bacao.ledger", []); }
@@ -318,6 +365,32 @@ async function clientApi(path, opts = {}) {
       stats: Bacao.stats(ledger),
       cooling_due: Bacao.coolingDue(ledger).map(recordSummaryClient),
     };
+  }
+  if (path === "/api/review" && method === "POST") {
+    const cfg = clientRawConfig();
+    const pcfg = cfg.providers[cfg.provider];
+    if (!pcfg) throw new Error("未知 provider");
+    const ledger = clientLedger();
+    const st = Bacao.stats(ledger);
+    const scope = body.scope === "all" ? "all" : "month";
+    let m = null;
+    if (scope === "month") {
+      const month = String(body.month || st.month);
+      m = (st.monthly || []).find((x) => x.month === month);
+      if (!m) throw new Error("该月份还没有台账数据");
+    }
+    let model = (pcfg.model || "").trim();
+    if (!model) model = await resolveClientModel(pcfg);
+    if (!model) throw new Error("未配置模型名，且无法从服务获取模型列表。请在设置里填写模型。");
+    const msgs = Bacao.buildReviewMessages(scope, m, st, ledger, cfg.persona || "salty");
+    const req = providerPlainRequest(pcfg, model, msgs.system, msgs.user, false);
+    verdictBusy = true;
+    try {
+      const { json } = await httpJSON("POST", req.url, req.headers, req.payload, 300000);
+      const text = extractText(json).trim();
+      if (!text) throw new Error("模型未返回点评内容：" + JSON.stringify(json).slice(0, 160));
+      return { text, model };
+    } finally { verdictBusy = false; }
   }
   if (path.startsWith("/api/models")) {
     const pid = new URLSearchParams(path.split("?")[1] || "").get("provider") || "";
@@ -1323,6 +1396,7 @@ async function renderLedger() {
 
 // ---------------- 月度战报页 ----------------
 let reportMonth = "";
+let reviewScope = "month";
 
 async function renderReport() {
   const cfg = await loadConfig();
@@ -1361,6 +1435,17 @@ async function renderReport() {
       <div class="share-box" id="share-preview" hidden></div>` : ""}
       <div class="hint" style="margin-top:14px">累计守住 <b>¥${Bacao.fmtNum(st.total_saved)}</b>＝🚫 听劝没买 + 😐 冷静期满没买（两类真实「没买」都算数）；放行购买与吃灰不计。</div>
     </div>
+    ${months.length ? `
+    <div class="card">
+      <h2>管家点评 <span class="sub">AI 根据台账总结 · 语气跟随当前人格</span></h2>
+      <div class="chips">
+        <span class="chip ${reviewScope === "month" ? "active" : ""}" data-rs="month">本月点评</span>
+        <span class="chip ${reviewScope === "all" ? "active" : ""}" data-rs="all">年度总评</span>
+      </div>
+      <div class="stream waiting" id="review-area"></div>
+      <div class="err-box" id="review-err" hidden></div>
+      <div class="btn-row"><button class="btn primary big" id="gen-review">✍️ 生成点评</button></div>
+    </div>` : ""}
   </section>`;
 
   $$("[data-m]").forEach((c) => c.addEventListener("click", () => { reportMonth = c.dataset.m; renderReport(); }));
@@ -1372,6 +1457,53 @@ async function renderReport() {
     box.textContent = text;
     copyText(text);
   });
+
+  // 管家点评：按数据指纹缓存，数据变化后指纹变化会提示重新生成
+  if (months.length && m) {
+    const paintReview = () => {
+      const key = reviewKey(reviewScope, reviewScope === "all" ? null : m, st);
+      const cached = reviewGet(key);
+      const area = $("#review-area"), btn = $("#gen-review");
+      if (!area) return key;
+      if (cached) {
+        area.classList.remove("waiting");
+        area.innerHTML = md(cached.text) +
+          `<div class="interp-meta">${esc(cached.at)}${cached.model ? " · " + esc(cached.model) : ""}</div>`;
+        btn.textContent = "🔄 重新点评";
+      } else {
+        area.classList.add("waiting");
+        area.textContent = reviewScope === "all"
+          ? "让管家根据全部台账，给你写一段年度总评。"
+          : "让管家根据 " + m.month + " 的台账，给你写一段点评。";
+        btn.textContent = "✍️ 生成点评";
+      }
+      return key;
+    };
+    const key = paintReview();
+    $$("[data-rs]").forEach((c) =>
+      c.addEventListener("click", () => { reviewScope = c.dataset.rs; renderReport(); }));
+    $("#gen-review").addEventListener("click", async () => {
+      const btn = $("#gen-review"), area = $("#review-area"), err = $("#review-err");
+      btn.disabled = true;
+      err.hidden = true;
+      btn.textContent = "管家执笔中…";
+      area.classList.remove("waiting");
+      area.innerHTML = '<span class="cursor">▍</span>';
+      try {
+        const resp = await api("/api/review", { method: "POST", body: {
+          scope: reviewScope, month: reviewScope === "month" ? reportMonth : undefined,
+        } });
+        reviewSet(key, resp.text, resp.model);
+        toast("点评已生成");
+      } catch (e) {
+        err.hidden = false;
+        err.textContent = hintFor(e.message);
+      } finally {
+        btn.disabled = false;
+        paintReview();
+      }
+    });
+  }
 }
 
 // ---------------- 设置页 ----------------

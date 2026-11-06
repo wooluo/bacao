@@ -350,5 +350,38 @@ class TestScreenshot(unittest.TestCase):
         self.assertNotIn("【附购物截图】", user)
 
 
+class TestReview(unittest.TestCase):
+    def test_build_review_messages(self):
+        ledger = [
+            {"item": "按摩", "price": 8999, "verdict": "weed", "outcome": "kept", "created": "2026-11-01 10:00:00"},
+            {"item": "泡脚桶", "price": 399, "verdict": "cool", "outcome": "cool_bought", "created": "2026-10-01 10:00:00"},
+        ]
+        st = engine.stats(ledger, now=dt(2026, 11, 6, 12, 0, 0))
+        system, user = engine.build_review_messages("month", st["monthly"][0], st, ledger, "salty")
+        self.assertIn("趣味称号", system)
+        self.assertIn("不允许人身羞辱", system)
+        self.assertIn("禁止推荐任何借贷", system)
+        self.assertNotIn("判定 JSON", system)  # 点评不是判定，不带 JSON 输出规范
+        self.assertIn("评语范围", user)
+        self.assertIn("守住 ¥899", user)
+        self.assertIn("吃灰名单之最", user)  # top_dust 注入
+        self.assertIn("请写点评", user)
+
+    def test_review_all_scope(self):
+        st = engine.stats([], now=dt(2026, 11, 6))
+        system, user = engine.build_review_messages("all", None, st, [], "mild")
+        self.assertIn("年度总评", user)
+        self.assertIn("温柔", system)
+
+    def test_top_dust_order_and_filter(self):
+        ledger = [
+            {"item": "a", "price": 5, "verdict": "weed", "outcome": "bought", "created": "2026-01-01 10:00:00"},
+            {"item": "b", "price": 99, "verdict": "cool", "outcome": "cool_bought", "created": "2026-01-02 10:00:00"},
+            {"item": "c", "price": 7, "verdict": "weed", "outcome": "kept", "created": "2026-01-03 10:00:00"},  # kept 非吃灰
+        ]
+        names = [r["item"] for r in engine.top_dust(ledger)]
+        self.assertEqual(names, ["b", "a"])  # 按价格降序且过滤 kept
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -593,3 +593,65 @@ def build_messages(record, salary, persona_id, dust=None):
         parts.append(_USER_SCREENSHOT_NOTE)
     parts.append("请直接输出判定 JSON。")
     return persona_system(persona_id, img), "\n".join(parts)
+
+
+# ---------------------------------------------------------------- 管家点评（月度/年度总结）
+
+_REVIEW_SYSTEM = """你是「拔草机」里的管家，现在要根据用户的台账数据，写一段消费行为点评（月度总结或年度总评）。
+
+写作要求：
+- 基于给出的真实数据说话：守住了多少钱、劝退几件、吃灰几件、最狠的一刀、月度走势等，挑亮点展开，不要流水账。
+- 给用户起一个贴合表现的趣味称号（如「守门员」「冷静大师」「吃灰收藏家」），放在最开头。
+- 篇幅：月度 60~150 字，年度 100~200 字；可以用 1~2 个 emoji。
+- 结尾给一句轻量建议或鼓励，但禁止极端抠门说教。
+- 毒舌≠羞辱：语气可以损，但绝不攻击用户本人；禁止推荐任何借贷/理财产品；不碰投资建议。
+- 直接输出点评正文，不要标题、不要解释你做了什么。"""
+
+
+def top_dust(ledger, limit=3):
+    """吃灰名单里价格最高的前几件（用于点评素材）。"""
+    items = [r for r in ledger if r.get("outcome") in DUST_OUTCOMES]
+    items.sort(key=_price_of, reverse=True)
+    return items[:limit]
+
+
+def _review_user_text(scope, m, st):
+    parts = []
+    if scope == "month" and m:
+        parts.append("【评语范围】%s 月度总结" % m["month"])
+        parts.append("【本月数据】过审 %d 件；守住 ¥%s（🚫听劝没买 %d 件 + 😐冷静期满没买 %d 件）；"
+                     "吃灰 %d 件共 ¥%s；拔草成功率 %s%%；吃灰率 %s%%"
+                     % (m["judged"], _fmt_num(m["saved"]), m["kept_count"], m["cool_saved_count"],
+                        m["dust"], _fmt_num(m["dust_amount"]), m["weed_rate"], m["dust_rate"]))
+        if m.get("max_weed"):
+            parts.append("【本月最狠一刀】%s ¥%s" % (m["max_weed"]["item"], _fmt_num(_price_of(m["max_weed"]))))
+        if m.get("max_pass"):
+            parts.append("【本月最大放行】%s ¥%s" % (m["max_pass"]["item"], _fmt_num(_price_of(m["max_pass"]))))
+        if st.get("month"):
+            parts.append("【所属月份】%s" % st["month"])
+    else:
+        parts.append("【评语范围】年度总评（累计 %d 个月有台账）" % len(st.get("monthly") or []))
+        parts.append("【累计数据】过审 %d 件；守住 ¥%s（🚫听劝没买 %d 件 + 😐冷静期满没买 %d 件）；"
+                     "吃灰 %d 件共 ¥%s；拔草成功率 %s%%；吃灰率 %s%%"
+                     % (st.get("judged_total", 0), _fmt_num(st.get("total_saved", 0)),
+                        st.get("total_kept_count", 0), st.get("total_cool_saved_count", 0),
+                        st.get("dust_count", 0), _fmt_num(st.get("dust_amount", 0)),
+                        st.get("success_rate", 0), st.get("dust_rate", 0)))
+        months = st.get("monthly") or []
+        if months:
+            series = "；".join("%s: 守住¥%s/过审%d件" % (x["month"], _fmt_num(x["saved"]), x["judged"])
+                               for x in months[:12])
+            parts.append("【月度走势】" + series)
+    return "\n".join(parts)
+
+
+def build_review_messages(scope, month_record, st, ledger, persona_id):
+    """管家点评提示词：(system, user)。scope 为 "month" 或 "all"。"""
+    user = _review_user_text(scope, month_record, st)
+    dust = top_dust(ledger)
+    if dust:
+        user += "\n【吃灰名单之最】" + "；".join(
+            "%s ¥%s" % (d.get("item"), _fmt_num(_price_of(d))) for d in dust)
+    user += "\n请写点评。"
+    tone = _PERSONA_TONE.get(persona_id) or _PERSONA_TONE["salty"]
+    return _REVIEW_SYSTEM + "\n\n" + tone, user

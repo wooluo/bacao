@@ -239,7 +239,7 @@ def _anthropic_content(user, images):
     return blocks
 
 
-def open_upstream(pcfg, model, system, user, images=None):
+def open_upstream(pcfg, model, system, user, images=None, stream=True):
     base = (pcfg.get("base") or "").rstrip("/")
     key = pcfg.get("api_key") or ""
     if pcfg.get("protocol") == "anthropic":
@@ -248,15 +248,15 @@ def open_upstream(pcfg, model, system, user, images=None):
         if key:
             headers["x-api-key"] = key
             headers["Authorization"] = "Bearer " + key
-        payload = {"model": model, "max_tokens": 2048, "temperature": 0.7,
-                   "system": system, "stream": True,
+        payload = {"model": model, "max_tokens": 2048, "temperature": 0.7, "stream": bool(stream),
+                   "system": system,
                    "messages": [{"role": "user", "content": _anthropic_content(user, images)}]}
     else:
         url = base + "/chat/completions"
         headers = {"Content-Type": "application/json"}
         if key:
             headers["Authorization"] = "Bearer " + key
-        payload = {"model": model, "temperature": 0.7, "stream": True,
+        payload = {"model": model, "temperature": 0.7, "stream": bool(stream),
                    "messages": [{"role": "system", "content": system},
                                 {"role": "user", "content": _openai_content(user, images)}]}
     # 快速模式：智谱系端点关闭深度思考，显著缩短等待（识图模型同样适用）
@@ -504,6 +504,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_judge()
         elif path == "/api/verdict":
             self._handle_verdict()
+        elif path == "/api/review":
+            self._handle_review()
         elif path.startswith("/api/ledger/") and path.endswith("/outcome"):
             self._handle_outcome(path)
         elif path.startswith("/api/ledger/") and path.endswith("/verdict"):
@@ -667,6 +669,63 @@ class Handler(BaseHTTPRequestHandler):
             if target is not None:
                 apply_verdict(target, raw)
                 save_ledger(ledger)
+
+    def _handle_review(self):
+        """管家点评（月度/年度总结）：非流式返回整段点评文本。"""
+        body = self._read_json()
+        cfg = load_config()
+        pid = body.get("provider") or cfg.get("provider")
+        pcfg = cfg["providers"].get(pid)
+        if not pcfg:
+            self._send_json({"error": "未知 provider：%s" % pid}, 400)
+            return
+        scope = body.get("scope") or "month"
+        if scope not in ("month", "all"):
+            self._send_json({"error": "scope 应为 month 或 all"}, 400)
+            return
+        with _LOCK:
+            ledger = load_ledger()
+        st = engine.stats(ledger)
+        m = None
+        if scope == "month":
+            month = str(body.get("month") or st["month"])
+            m = next((x for x in st["monthly"] if x["month"] == month), None)
+            if m is None:
+                self._send_json({"error": "该月份还没有台账数据"}, 400)
+                return
+        persona = cfg.get("persona") or "salty"
+        system, user = engine.build_review_messages(scope, m, st, ledger, persona)
+        model = resolve_model(pcfg)
+        if not model:
+            self._send_json({"error": "未配置模型名，且无法从 %s 获取模型列表。请在设置里填写模型。"
+                                      % pcfg.get("label", pid)}, 502)
+            return
+        try:
+            resp = open_upstream(pcfg, model, system, user, stream=False)
+        except urllib.error.HTTPError as e:
+            try:
+                detail = e.read().decode("utf-8", "replace")[:400]
+            except Exception:
+                detail = ""
+            self._send_json({"error": "上游返回 HTTP %d：%s" % (e.code, detail)}, 502)
+            return
+        except Exception as e:
+            self._send_json({"error": "无法连接 %s：%s（请检查网络与接口地址）"
+                                      % (pcfg.get("label", pid), e)}, 502)
+            return
+        try:
+            text = "".join(iter_deltas(resp)).strip()
+        except Exception as e:
+            text = ""
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+        if not text:
+            self._send_json({"error": "模型未返回点评内容"}, 502)
+            return
+        self._send_json({"text": text, "model": model, "persona": persona})
 
     def _handle_outcome(self, path):
         rid = path.split("/")[-2]

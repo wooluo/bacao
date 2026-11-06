@@ -508,6 +508,60 @@ function buildMessages(record, salary, personaId, dust) {
   return { system: personaSystem(personaId, img), user: parts.join("\n") };
 }
 
+// ---------------- 管家点评（月度/年度总结） ----------------
+
+const REVIEW_SYSTEM = `你是「拔草机」里的管家，现在要根据用户的台账数据，写一段消费行为点评（月度总结或年度总评）。
+
+写作要求：
+- 基于给出的真实数据说话：守住了多少钱、劝退几件、吃灰几件、最狠的一刀、月度走势等，挑亮点展开，不要流水账。
+- 给用户起一个贴合表现的趣味称号（如「守门员」「冷静大师」「吃灰收藏家」），放在最开头。
+- 篇幅：月度 60~150 字，年度 100~200 字；可以用 1~2 个 emoji。
+- 结尾给一句轻量建议或鼓励，但禁止极端抠门说教。
+- 毒舌≠羞辱：语气可以损，但绝不攻击用户本人；禁止推荐任何借贷/理财产品；不碰投资建议。
+- 直接输出点评正文，不要标题、不要解释你做了什么。`;
+
+function topDust(ledger, limit) {
+  const items = (ledger || []).filter((r) => DUST_OUTCOMES.indexOf(r.outcome) >= 0);
+  items.sort((a, b) => priceOf(b) - priceOf(a));
+  return items.slice(0, limit || 3);
+}
+
+function reviewUserText(scope, m, st) {
+  const parts = [];
+  if (scope === "month" && m) {
+    parts.push("【评语范围】" + m.month + " 月度总结");
+    parts.push("【本月数据】过审 " + m.judged + " 件；守住 ¥" + fmtNum(m.saved) +
+      "（🚫听劝没买 " + m.kept_count + " 件 + 😐冷静期满没买 " + m.cool_saved_count + " 件）；" +
+      "吃灰 " + m.dust + " 件共 ¥" + fmtNum(m.dust_amount) +
+      "；拔草成功率 " + m.weed_rate + "%；吃灰率 " + m.dust_rate + "%");
+    if (m.max_weed) parts.push("【本月最狠一刀】" + m.max_weed.item + " ¥" + fmtNum(priceOf(m.max_weed)));
+    if (m.max_pass) parts.push("【本月最大放行】" + m.max_pass.item + " ¥" + fmtNum(priceOf(m.max_pass)));
+  } else {
+    parts.push("【评语范围】年度总评（累计 " + ((st.monthly || []).length) + " 个月有台账）");
+    parts.push("【累计数据】过审 " + (st.judged_total || 0) + " 件；守住 ¥" + fmtNum(st.total_saved || 0) +
+      "（🚫听劝没买 " + (st.total_kept_count || 0) + " 件 + 😐冷静期满没买 " + (st.total_cool_saved_count || 0) + " 件）；" +
+      "吃灰 " + (st.dust_count || 0) + " 件共 ¥" + fmtNum(st.dust_amount || 0) +
+      "；拔草成功率 " + (st.success_rate || 0) + "%；吃灰率 " + (st.dust_rate || 0) + "%");
+    const months = st.monthly || [];
+    if (months.length) {
+      parts.push("【月度走势】" + months.slice(0, 12).map((x) =>
+        x.month + ": 守住¥" + fmtNum(x.saved) + "/过审" + x.judged + "件").join("；"));
+    }
+  }
+  return parts.join("\n");
+}
+
+function buildReviewMessages(scope, m, st, ledger, personaId) {
+  let user = reviewUserText(scope, m, st);
+  const dust = topDust(ledger);
+  if (dust.length) {
+    user += "\n【吃灰名单之最】" + dust.map((d) => d.item + " ¥" + fmtNum(priceOf(d))).join("；");
+  }
+  user += "\n请写点评。";
+  const system = REVIEW_SYSTEM + "\n\n" + (PERSONA_TONE[personaId] || PERSONA_TONE.salty);
+  return { system, user };
+}
+
 // ---------------- 导出 ----------------
 
 const Bacao = {
@@ -518,6 +572,7 @@ const Bacao = {
   stripFence, extractObject, repairJson, normalizeVerdict, parseVerdict, parsePartial, autoclose,
   priceOf, stats, coolingDue, coolingUntil, markOutcome, manualVerdict,
   dustMatches, dustLines, personaSystem, buildMessages, hasImage,
+  topDust, buildReviewMessages,
 };
 
 global.Bacao = Bacao;
