@@ -196,12 +196,15 @@ input::placeholder, textarea::placeholder { color: var(--ink-faint); }
   position: relative;
   box-shadow: var(--shadow);
 }
-.paper::before {
-  content: "工资保卫战 · 消费审批单";
-  position: absolute; top: 8px; right: 12px;
-  font-size: 10.5px; color: var(--paper-soft); letter-spacing: 1px;
+.paper-flag {
+  font-size: 10.5px; color: var(--paper-soft);
+  letter-spacing: 3px; margin-bottom: 8px;
 }
-.paper .form-no { font-size: 11.5px; color: var(--paper-soft); letter-spacing: 1px; }
+.paper .form-no {
+  font-size: 11.5px; color: var(--paper-soft);
+  letter-spacing: 0.5px; line-height: 1.8;
+  word-break: break-all;
+}
 .paper h3 { margin: 8px 0 4px; font-size: 21px; line-height: 1.4; word-break: break-all; }
 .paper .price-line { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 4px 0; }
 .paper .price { font-size: 26px; font-weight: 800; color: #8c3324; }

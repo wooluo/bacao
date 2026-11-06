@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>人生虚度记录仪</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="coin">⏳</span>人生虚度记录仪</div>
+    <nav>
+      <a href="#/home" data-nav="home">首页</a>
+      <a href="#/judge" data-nav="judge">录入</a>
+      <a href="#/ledger" data-nav="ledger">台账</a>
+      <a href="#/report" data-nav="report">战报</a>
+      <a href="#/settings" data-nav="settings">档案</a>
+    </nav>
+  </header>
+  <main id="app"></main>
+  <footer>记录每一日虚度，看清余生还有多少时光<br>判定与寿命测算由 AI 生成，仅供娱乐与自我反思 · 不构成医疗建议</footer>
+  <div class="toast" id="toast"></div>
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

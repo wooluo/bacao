@@ -280,7 +280,7 @@ function parsePartial(raw) {
 }
 
 // ---------------- 台账统计 ----------------
-// 守住金额只计：verdict==weed 且 outcome==kept（听劝没买）
+// 守住金额计两类真实「没买」：🚫 听劝没买（kept）+ 😐 冷静期满没买（cool_didnt_buy）
 
 function priceOf(r) {
   const p = Number(r && r.price);
@@ -292,8 +292,8 @@ function stats(ledger, now) {
   const monthKey = d.getFullYear() + "-" + pad2(d.getMonth() + 1);
   const st = {
     month: monthKey,
-    month_saved: 0, month_kept_count: 0,
-    total_saved: 0, total_kept_count: 0,
+    month_saved: 0, month_kept_count: 0, month_cool_saved_count: 0,
+    total_saved: 0, total_kept_count: 0, total_cool_saved_count: 0,
     weed_total: 0, weed_kept: 0, weed_bought: 0,
     cool_total: 0, cool_didnt_buy: 0, cool_bought: 0, cool_pending: 0,
     pass_total: 0, pass_bought: 0,
@@ -309,29 +309,43 @@ function stats(ledger, now) {
     const created = String(r.created || "");
     const mk = created.slice(0, 7);
     if (!monthly[mk]) monthly[mk] = {
-      month: mk, judged: 0, saved: 0, kept_count: 0, resolved: 0, persuaded: 0,
-      dust: 0, dust_amount: 0, max_weed: null, max_pass: null,
+      month: mk, judged: 0, saved: 0, kept_count: 0, cool_saved_count: 0,
+      resolved: 0, persuaded: 0, dust: 0, dust_amount: 0, max_weed: null, max_pass: null,
     };
     const m = monthly[mk];
     if (VERDICTS.indexOf(v) < 0) continue;
     st.judged_total++; m.judged++;
+    let savedThis = false; // 这单是否守住一笔钱
     if (v === "weed") {
       st.weed_total++;
       if (o === "kept") {
         st.weed_kept++;
         st.total_kept_count++;
-        st.total_saved += price;
-        m.kept_count++; m.saved += price;
-        if (created.slice(0, 7) === monthKey) { st.month_kept_count++; st.month_saved += price; }
+        m.kept_count++;
+        savedThis = true;
       } else if (o === "bought") st.weed_bought++;
     } else if (v === "cool") {
       st.cool_total++;
-      if (o === "cool_didnt_buy") st.cool_didnt_buy++;
+      if (o === "cool_didnt_buy") {
+        st.cool_didnt_buy++;
+        st.total_cool_saved_count++;
+        m.cool_saved_count++;
+        savedThis = true;
+      }
       else if (o === "cool_bought") st.cool_bought++;
       else if (o === "cool_pending") st.cool_pending++;
     } else if (v === "pass") {
       st.pass_total++;
       if (o === "pass_bought") st.pass_bought++;
+    }
+    if (savedThis) {
+      st.total_saved += price;
+      m.saved += price;
+      if (created.slice(0, 7) === monthKey) {
+        st.month_saved += price;
+        if (v === "weed" && o === "kept") st.month_kept_count++;
+        else if (v === "cool" && o === "cool_didnt_buy") st.month_cool_saved_count++;
+      }
     }
     if (DUST_OUTCOMES.indexOf(o) >= 0) {
       st.dust_count++; st.dust_amount += price;

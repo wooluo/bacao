@@ -154,12 +154,16 @@ class TestStats(unittest.TestCase):
 
     def test_saved_only_weed_and_kept(self):
         st = engine.stats(self.LEDGER, now=dt(2026, 11, 6, 12, 0, 0))
-        # 守住金额只计 🚫 且「听劝没买」：只有键盘 899
+        # 守住金额 = 🚫听劝没买 + 😐冷静期满没买：键盘 899（weed kept）+ 泡脚桶 399（cool 没买，10月）
+        self.assertEqual(st["total_saved"], 1298)
+        # 当月（11月）只有键盘：香薰机是 cool_bought（吃灰）不计
         self.assertEqual(st["month_saved"], 899)
-        self.assertEqual(st["total_saved"], 899)
         self.assertEqual(st["month_kept_count"], 1)
-        # pass_bought 的手表 2000 绝不能计入
-        self.assertNotEqual(st["month_saved"], 2899)
+        self.assertEqual(st["total_kept_count"], 1)  # 听劝件数保持🚫口径
+        self.assertEqual(st["total_cool_saved_count"], 1)  # 冷静没买件数另计
+        # pass_bought 的手表 2000、吃灰的耳机/香薰机都绝不能计入
+        self.assertNotEqual(st["total_saved"], 2899)
+        self.assertNotEqual(st["total_saved"], 1598)
 
     def test_rates(self):
         st = engine.stats(self.LEDGER, now=dt(2026, 11, 6, 12, 0, 0))
@@ -179,6 +183,8 @@ class TestStats(unittest.TestCase):
         m11 = st["monthly"][0]
         self.assertEqual(m11["judged"], 5)
         self.assertEqual(m11["saved"], 899)
+        self.assertEqual(m11["kept_count"], 1)
+        self.assertEqual(m11["cool_saved_count"], 0)  # 11月的香薰机是 cool_bought（吃灰）
         # 11 月 resolved：键盘(kept)/耳机(bought)/香薰机(买了)=3，劝退 1 → 33.3%
         self.assertEqual(m11["resolved"], 3)
         self.assertEqual(m11["weed_rate"], 33.3)
@@ -186,7 +192,9 @@ class TestStats(unittest.TestCase):
         self.assertEqual(m11["max_weed"], {"item": "耳机", "price": 1500})
         self.assertEqual(m11["max_pass"], {"item": "手表", "price": 2000})
         m10 = st["monthly"][1]
-        self.assertEqual(m10["saved"], 0)
+        # 10 月泡脚桶冷静期满没买 → 守住 399
+        self.assertEqual(m10["saved"], 399)
+        self.assertEqual(m10["cool_saved_count"], 1)
         self.assertEqual(m10["persuaded"], 1)
 
     def test_empty(self):

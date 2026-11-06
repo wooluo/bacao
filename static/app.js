@@ -889,11 +889,14 @@ async function renderRecord(id, auto) {
     `<span class="chip ${pid === cfg.provider ? "active" : ""}" data-prov="${pid}">${esc(p.label)}</span>`).join("");
   const h = Bacao.hoursText(record.price, record.hourly || cfg.hourly);
   const dustNames = (record.dust_used || []).length;
+  const pr = Bacao.PERSONAS[record.persona] || Bacao.PERSONAS.salty;
 
   app.innerHTML = `
   <section>
     <div class="paper">
-      <div class="form-no">NO.${esc(record.id)} · ${esc(record.created)} · ${esc((Bacao.PERSONAS[record.persona] || Bacao.PERSONAS.salty).emoji)}${esc((Bacao.PERSONAS[record.persona] || Bacao.PERSONAS.salty).label)}在审</div>
+      <div class="paper-flag">工资保卫战 · 消费审批单</div>
+      <div class="form-no">NO.${esc(record.id)}</div>
+      <div class="form-no">${esc(record.created)} · ${esc(pr.emoji)} ${esc(pr.label)}在审</div>
       <h3>${esc(record.item)}</h3>
       <div class="price-line">
         <span class="price">¥${Bacao.fmtNum(record.price)}</span>
@@ -1238,7 +1241,7 @@ function shareOneText(r) {
 function shareMonthText(m, all) {
   const lines = [
     "【拔草机 · " + m.month + " 战报】",
-    "本月我为工资守住了 ¥" + Bacao.fmtNum(m.saved) + "，听劝拔草 " + m.kept_count + " 件",
+    "本月我为工资守住了 ¥" + Bacao.fmtNum(m.saved) + "，劝退 " + m.persuaded + " 件（🚫听劝没买 " + m.kept_count + " + 😐冷静没买 " + m.cool_saved_count + "）",
     "过审 " + m.judged + " 件 · 拔草成功率 " + m.weed_rate + "% · 吃灰率 " + m.dust_rate + "%",
   ];
   if (m.max_weed) lines.push("最狠的一刀：" + m.max_weed.item + "（¥" + Bacao.fmtNum(m.max_weed.price) + "）");
@@ -1275,7 +1278,7 @@ async function renderLedger() {
   app.innerHTML = `
   <section>
     <div class="card">
-      <h2>拔草台账 <span class="sub">${st.judged_total} 件过审 · 听劝守住 ¥${Bacao.fmtNum(st.total_saved)}</span></h2>
+      <h2>拔草台账 <span class="sub">${st.judged_total} 件过审 · 累计守住 ¥${Bacao.fmtNum(st.total_saved)}</span></h2>
       <div class="chips">${filters.map(([k, label]) =>
         `<span class="chip ${ledgerFilter === k ? "active" : ""}" data-f="${k}">${label}</span>`).join("")}</div>
     </div>
@@ -1346,7 +1349,8 @@ async function renderReport() {
       </div>
       <div class="chip-row" style="margin-top:12px">
         <span class="tag">过审 ${m.judged} 件</span>
-        <span class="tag">听劝 ${m.kept_count} 件</span>
+        <span class="tag red">🚫 听劝没买 ${m.kept_count} 件</span>
+        <span class="tag amber">😐 冷静没买 ${m.cool_saved_count} 件</span>
         <span class="tag red">吃灰 ${m.dust} 件（¥${Bacao.fmtNum(m.dust_amount)}）</span>
         ${m.max_weed ? `<span class="tag gold">最狠一刀：${esc(m.max_weed.item)} ¥${Bacao.fmtNum(m.max_weed.price)}</span>` : ""}
         ${m.max_pass ? `<span class="tag">最大放行：${esc(m.max_pass.item)} ¥${Bacao.fmtNum(m.max_pass.price)}</span>` : ""}
@@ -1355,7 +1359,7 @@ async function renderReport() {
         <button class="btn primary big" id="share-month">📣 生成战报，复制分享</button>
       </div>
       <div class="share-box" id="share-preview" hidden></div>` : ""}
-      <div class="hint" style="margin-top:14px">累计守住 <b>¥${Bacao.fmtNum(st.total_saved)}</b>（只计「🚫 拔草 + 听劝没买」）；冷静期 72h 后没买也算拔草成功，但不计入守住金额。</div>
+      <div class="hint" style="margin-top:14px">累计守住 <b>¥${Bacao.fmtNum(st.total_saved)}</b>＝🚫 听劝没买 + 😐 冷静期满没买（两类真实「没买」都算数）；放行购买与吃灰不计。</div>
     </div>
   </section>`;
 

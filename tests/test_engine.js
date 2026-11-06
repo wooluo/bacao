@@ -91,8 +91,11 @@ const LEDGER = [
   { item: "未判定", price: 100, verdict: null, outcome: "pending", created: "2026-11-05 10:00:00" },
 ];
 const st = B.stats(LEDGER, new Date(2026, 10, 6, 12, 0, 0));
-assert.strictEqual(st.month_saved, 899);
-assert.strictEqual(st.total_saved, 899);
+// 守住金额 = 🚫听劝没买 + 😐冷静期满没买：键盘 899（11月）+ 泡脚桶 399（10月）
+assert.strictEqual(st.total_saved, 1298);
+assert.strictEqual(st.month_saved, 899); // 当月只有键盘：香薰机是 cool_bought 不计
+assert.strictEqual(st.total_kept_count, 1); // 听劝件数保持🚫口径
+assert.strictEqual(st.total_cool_saved_count, 1); // 冷静没买件数另计
 assert.strictEqual(st.resolved, 4);
 assert.strictEqual(st.persuaded, 2);
 assert.strictEqual(st.success_rate, 50.0);
@@ -103,11 +106,14 @@ assert.strictEqual(st.cool_pending, 1);
 assert.deepStrictEqual(st.monthly.map((m) => m.month), ["2026-11", "2026-10"]);
 const m11 = st.monthly[0];
 assert.strictEqual(m11.saved, 899);
+assert.strictEqual(m11.kept_count, 1);
+assert.strictEqual(m11.cool_saved_count, 0);
 assert.strictEqual(m11.weed_rate, 33.3);
 assert.strictEqual(m11.dust_rate, 66.7);
 assert.deepStrictEqual(m11.max_weed, { item: "耳机", price: 1500 });
 assert.deepStrictEqual(m11.max_pass, { item: "手表", price: 2000 });
-console.log("✓ 台账统计聚合（月战报/成功率/吃灰率/最贵拔草放行）");
+assert.strictEqual(st.monthly[1].saved, 399); // 10月泡脚桶冷静期满没买
+console.log("✓ 台账统计聚合（🚫听劝 + 😐冷静没买都计入守住；月战报/成功率/吃灰率/最贵拔草放行）");
 
 // ---------------- 冷静期 72h（注入时间偏移） ----------------
 assert.strictEqual(B.coolingUntil("2026-11-06 12:00:00"), "2026-11-09 12:00:00");

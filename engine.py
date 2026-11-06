@@ -356,16 +356,17 @@ def _price_of(r):
 
 
 def stats(ledger, now=None):
-    """台账聚合。守住金额只计：verdict==weed 且 outcome==kept（听劝没买）。
+    """台账聚合。守住金额计两类真实「没买」：🚫 听劝没买（kept）+ 😐 冷静期满没买（cool_didnt_buy）。
 
-    monthly: 按月战报（守住金额、拔草率、吃灰率、最贵的拔草/放行）。
+    放行购买、吃灰（还是买了）不计入。monthly: 按月战报（守住金额、拔草率、吃灰率、最贵的拔草/放行）。
+    kept_count / total_kept_count 保持「🚫听劝」口径；冷静没买件数另计 *_cool_saved_count。
     """
     now = now or datetime.now()
     month_key = now.strftime("%Y-%m")
     st = {
         "month": month_key,
-        "month_saved": 0.0, "month_kept_count": 0,
-        "total_saved": 0.0, "total_kept_count": 0,
+        "month_saved": 0.0, "month_kept_count": 0, "month_cool_saved_count": 0,
+        "total_saved": 0.0, "total_kept_count": 0, "total_cool_saved_count": 0,
         "weed_total": 0, "weed_kept": 0, "weed_bought": 0,
         "cool_total": 0, "cool_didnt_buy": 0, "cool_bought": 0, "cool_pending": 0,
         "pass_total": 0, "pass_bought": 0,
@@ -381,30 +382,31 @@ def stats(ledger, now=None):
         mk = created[:7]
         m = st["monthly"].setdefault(mk, {
             "month": mk, "judged": 0, "saved": 0.0, "kept_count": 0,
-            "resolved": 0, "persuaded": 0, "dust": 0, "dust_amount": 0.0,
+            "cool_saved_count": 0, "resolved": 0, "persuaded": 0,
+            "dust": 0, "dust_amount": 0.0,
             "max_weed": None, "max_pass": None,
         })
         if v not in VERDICTS:
             continue  # 未判定 / 解析失败的记录不进统计
         st["judged_total"] += 1
         m["judged"] += 1
+        saved_this = False  # 这单是否守住一笔钱
         if v == "weed":
             st["weed_total"] += 1
             if o == "kept":
                 st["weed_kept"] += 1
                 st["total_kept_count"] += 1
-                st["total_saved"] += price
                 m["kept_count"] += 1
-                m["saved"] += price
-                if created.startswith(month_key):
-                    st["month_kept_count"] += 1
-                    st["month_saved"] += price
+                saved_this = True
             elif o == "bought":
                 st["weed_bought"] += 1
         elif v == "cool":
             st["cool_total"] += 1
             if o == "cool_didnt_buy":
                 st["cool_didnt_buy"] += 1
+                st["total_cool_saved_count"] += 1
+                m["cool_saved_count"] += 1
+                saved_this = True
             elif o == "cool_bought":
                 st["cool_bought"] += 1
             elif o == "cool_pending":
@@ -413,6 +415,15 @@ def stats(ledger, now=None):
             st["pass_total"] += 1
             if o == "pass_bought":
                 st["pass_bought"] += 1
+        if saved_this:
+            st["total_saved"] += price
+            m["saved"] += price
+            if created.startswith(month_key):
+                st["month_saved"] += price
+                if v == "weed" and o == "kept":
+                    st["month_kept_count"] += 1
+                elif v == "cool" and o == "cool_didnt_buy":
+                    st["month_cool_saved_count"] += 1
         if o in DUST_OUTCOMES:
             st["dust_count"] += 1
             st["dust_amount"] += price
