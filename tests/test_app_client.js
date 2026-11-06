@@ -302,10 +302,10 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   assert.ok(/工资设定/.test(appEl.innerHTML), "设置页应渲染工资设定区块");
   assert.ok(/毒舌人格/.test(appEl.innerHTML), "设置页应渲染人格区块");
   assert.ok(/审判服务/.test(appEl.innerHTML), "设置页应渲染服务区块");
-  assert.ok(/离线模式/.test(appEl.innerHTML), "设置页应显示离线模式标识");
+  assert.ok(/识图模型/.test(appEl.innerHTML), "设置页应渲染识图模型字段"); // 说明卡片已按产品要求移除
   assert.strictEqual(unhandled.length, 0, "渲染不应有未捕获异常：" + (unhandled[0] && unhandled[0].message));
   console.log("✓ 原生环境强制离线模式 OK（回归：200 HTML 不误判）");
-  console.log("✓ 手机环境设置页渲染 OK（工资/人格/服务/离线标识，无未捕获异常）");
+  console.log("✓ 手机环境设置页渲染 OK（工资/人格/服务/识图模型，无未捕获异常）");
 
   // 8) 手机端全流程：配置 → judge → StreamHttp 流式过审 → 落账
   await LY2.clientApi("/api/config", { method: "POST",
@@ -333,6 +333,12 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   assert.strictEqual(unhandled.length, 0, "台账页渲染不应有未捕获异常");
   console.log("✓ 原生 StreamHttp 流式过审 OK（%d 次增量 → pass 落账，放行不计守住）", deltas);
   console.log("✓ 手机环境台账页渲染 OK");
+
+  // 9) CSS 回归：[hidden] 规则必须存在——否则 display:flex 类会把 hidden 属性顶掉（截图预览框漏显示事故）
+  const css = fs.readFileSync(path.join(__dirname, "..", "static", "style.css"), "utf8");
+  assert.ok(/\[hidden\][^{]*\{[^}]*display:\s*none\s*!important/.test(css),
+    "style.css 必须包含 [hidden]{display:none!important} 规则");
+  console.log("✓ CSS 回归守卫 OK（[hidden] 规则在位）");
 
   process.off("unhandledRejection", (e) => unhandled.push(e));
   stubServer.close();

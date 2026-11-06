@@ -2,7 +2,7 @@
   "name": "bacao-mobile",
   "version": "1.0.0",
   "private": true,
-  "description": "工资拔草机 安卓壳（Capacitor）",
+  "description": "拔草机 安卓壳（Capacitor）",
   "scripts": {
     "sync": "cp -R ../static/* www/ && npx cap sync android",
     "build": "npm run sync && cd android && ./gradlew assembleDebug",

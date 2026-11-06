@@ -164,7 +164,7 @@ class TestAPI(unittest.TestCase):
     # ---------- 用例 ----------
     def test_01_static(self):
         html = self.request("GET", "/")
-        self.assertIn("工资拔草机", html)
+        self.assertIn("拔草机", html)
         js = self.request("GET", "/static/app.js")
         self.assertIn("startVerdict", js)
         eng = self.request("GET", "/static/engine.js")

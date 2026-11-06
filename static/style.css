@@ -1,4 +1,4 @@
-/* 工资拔草机 · 军费账本风（移动优先）：深绿底、军绿卡片、审批单为米黄纸 */
+/* 拔草机 · 军费账本风（移动优先）：深绿底、军绿卡片、审批单为米黄纸 */
 :root {
   --bg: #0c1b10;
   --bg-2: #0f2314;
@@ -21,6 +21,8 @@
 }
 
 * { box-sizing: border-box; }
+/* hidden 属性必须赢过任何 author 的 display 规则（否则 .img-preview{display:flex} 等会把 hidden 顶掉） */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;

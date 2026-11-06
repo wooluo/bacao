@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""工资拔草机 · 本地服务（Python 标准库，零依赖）
+"""拔草机 · 本地服务（Python 标准库，零依赖）
 
 - 提供网页与 JSON API：工资设定、拔草过审（LLM 流式）、拔草台账、冷静期回访、月度战报
 - 代理 LLM 判定（流式）：OpenAI/Anthropic 兼容服务（默认智谱 GLM）
@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
     "providers": {
         "glm": {
             "label": "GLM 智谱（Coding Plan）", "protocol": "openai",
-            "base": "https://open.bigmodel.cn/api/coding/paas/v4", "model": "glm-5.3",
+            "base": "https://open.bigmodel.cn/api/coding/paas/v4", "model": "glm-5.3-flash",
             "vision_model": "glm-4.5v",  # 购物截图判定用（识图模型）
             "api_key": "", "fast": True,
         },
@@ -704,7 +704,7 @@ class Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------- 入口
 
 def main():
-    ap = argparse.ArgumentParser(description="工资拔草机 本地服务")
+    ap = argparse.ArgumentParser(description="拔草机 本地服务")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8772)
     args = ap.parse_args()
@@ -716,7 +716,7 @@ def main():
         save_ledger([])
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
-    print("工资拔草机 服务已启动")
+    print("拔草机 服务已启动")
     print("  本机访问:  http://127.0.0.1:%d" % args.port)
     if args.host not in ("127.0.0.1", "localhost"):
         print("  局域网访问: http://<本机IP>:%d （手机同 Wi-Fi 可用）" % args.port)

@@ -1,5 +1,5 @@
 #!/bin/bash
-# 工资拔草机 · 一键重建安卓 APK（同步前端 + Gradle 构建）
+# 拔草机 · 一键重建安卓 APK（同步前端 + Gradle 构建）
 # 自带工具链校验：强制使用 tools/ 内的 JDK 21，清掉旧 daemon，不受系统 Java/环境变量干扰。
 set -e
 cd "$(dirname "$0")"
@@ -26,12 +26,12 @@ npx cap sync android
 # 3) 清理可能携带旧 JDK 的 Gradle daemon，强制本次构建的 JVM 与 JAVA_HOME 一致
 (cd android && ./gradlew --stop > /dev/null 2>&1 || true)
 (cd android && ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" assembleDebug)
-cp android/app/build/outputs/apk/debug/app-debug.apk ./工资拔草机-debug.apk
+cp android/app/build/outputs/apk/debug/app-debug.apk ./拔草机-debug.apk
 
 # 4) 正式签名版（keystore.properties 存在时）
 if [ -f keystore.properties ]; then
   (cd android && ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" assembleRelease)
-  cp android/app/build/outputs/apk/release/app-release.apk ./工资拔草机.apk
-  echo "✓ 正式版：$(pwd)/工资拔草机.apk"
+  cp android/app/build/outputs/apk/release/app-release.apk ./拔草机.apk
+  echo "✓ 正式版：$(pwd)/拔草机.apk"
 fi
-echo "✓ 调试版：$(pwd)/工资拔草机-debug.apk"
+echo "✓ 调试版：$(pwd)/拔草机-debug.apk"

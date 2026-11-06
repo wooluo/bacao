@@ -1,5 +1,5 @@
 "use strict";
-/* 工资拔草机 · 前端（原生 JS，零依赖）
+/* 拔草机 · 前端（原生 JS，零依赖）
  * 双模式：server（本地 Python 服务，流式）/ client（APK 或直开页面，localStorage + 直连 AI）
  */
 
@@ -57,7 +57,7 @@ function defaultConfig() {
     provider: "glm", persona: "salty",
     salary: { monthly: 0, days: 21.75, hours_per_day: 8 },
     providers: {
-      glm: { label: "GLM 智谱（Coding Plan）", protocol: "openai", base: "https://open.bigmodel.cn/api/coding/paas/v4", model: "glm-5.3", vision_model: "glm-4.5v", api_key: "", fast: true }
+      glm: { label: "GLM 智谱（Coding Plan）", protocol: "openai", base: "https://open.bigmodel.cn/api/coding/paas/v4", model: "glm-5.3-flash", vision_model: "glm-4.5v", api_key: "", fast: true }
     }
   };
 }
@@ -600,7 +600,7 @@ function renderOnboarding() {
   if (onboard.step === 0) {
     body = `
       <div class="onboard-step">第 1 / 3 步</div>
-      <h2>先把军费报上来 <span class="sub">工资拔草机需要知道你的时薪</span></h2>
+      <h2>先把军费报上来 <span class="sub">拔草机需要知道你的时薪</span></h2>
       <label class="field">每月到手工资（元，税后实发更准）</label>
       <input type="number" id="ob-monthly" min="1" step="100" placeholder="例：10000" value="${esc(onboard.monthly)}">
       <div class="hint">只在本机保存，用于把价格换算成「生命小时数」。不上传、不联网同步。</div>
@@ -635,7 +635,7 @@ function renderOnboarding() {
   }
 
   app.innerHTML = `<section><div class="card hero">${body}
-    <div class="hint" style="margin-top:16px">「工资拔草机」是一个娱乐性理性消费辅助工具：想买东西先来过一审，AI 专给不买的理由，帮你冷静。判定仅供参考。</div>
+    <div class="hint" style="margin-top:16px">「拔草机」是一个娱乐性理性消费辅助工具：想买东西先来过一审，AI 专给不买的理由，帮你冷静。判定仅供参考。</div>
   </div></section>`;
 
   const wire = (id, key) => {
@@ -1186,7 +1186,7 @@ async function finishVerdictUI(rid, record, buf) {
     area.innerHTML = verdictCardHtml(r, { partial: false });
     const slot = $("#stamp-slot");
     const lv = Bacao.VERDICT_LABELS[r.verdict];
-    slot.innerHTML = `<div class="stamp ${esc(r.verdict)} show">${esc(lv.stamp)}<span class="vsmall">工资拔草机 · ${r.confidence != null ? "拔草指数 " + r.confidence : ""}</span></div>`;
+    slot.innerHTML = `<div class="stamp ${esc(r.verdict)} show">${esc(lv.stamp)}<span class="vsmall">拔草机 · ${r.confidence != null ? "拔草指数 " + r.confidence : ""}</span></div>`;
     toast({ weed: "🚫 不予批准——管家的刀已出鞘", cool: "😐 暂缓批准，先进冷静清单", pass: "✅ 准予购买，但要聪明地买" }[r.verdict] || "已入账");
   } else {
     area.innerHTML = md(buf || "") + '<div class="hint warn">（AI 输出没能解析成判定 JSON，以上为原文；可在下方手动归档）</div>';
@@ -1212,7 +1212,7 @@ function hintFor(msg) {
 function shareOneText(r) {
   const lv = Bacao.VERDICT_LABELS[r.verdict] || { emoji: "❓", label: "?" };
   const lines = [
-    "【工资拔草机 · AI 审批单】",
+    "【拔草机 · AI 审批单】",
     "想买：" + r.item + " ¥" + Bacao.fmtNum(r.price),
   ];
   const h = Bacao.hoursText(r.price, r.hourly);
@@ -1232,7 +1232,7 @@ function shareOneText(r) {
 
 function shareMonthText(m, all) {
   const lines = [
-    "【工资拔草机 · " + m.month + " 战报】",
+    "【拔草机 · " + m.month + " 战报】",
     "本月我为工资守住了 ¥" + Bacao.fmtNum(m.saved) + "，听劝拔草 " + m.kept_count + " 件",
     "过审 " + m.judged + " 件 · 拔草成功率 " + m.weed_rate + "% · 吃灰率 " + m.dust_rate + "%",
   ];
@@ -1425,7 +1425,7 @@ async function renderSettings() {
           </div>
           <label class="field">模型名 <span style="font-weight:400">（可下拉选择或手动输入）</span></label>
           <select data-f="model_select" hidden></select>
-          <input type="text" data-f="model" value="${esc(p.model)}" placeholder="如 glm-5.3" style="margin-top:8px">
+          <input type="text" data-f="model" value="${esc(p.model)}" placeholder="如 glm-5.3-flash" style="margin-top:8px">
           <label class="field">识图模型 <span style="font-weight:400">（购物截图判定用，如 glm-4.5v / glm-4v-flash）</span></label>
           <input type="text" data-f="vision_model" value="${esc(p.vision_model || "")}" placeholder="如 glm-4.5v" style="margin-top:8px">
           <label class="chk-line"><input type="checkbox" data-f="fast" ${p.fast ? "checked" : ""}> 快速模式（关闭深度思考，GLM 出结果更快）</label>
@@ -1437,17 +1437,6 @@ async function renderSettings() {
         </div>`).join("")}
       <div class="btn-row">
         <button class="btn primary big" id="save-cfg">保存服务设置</button>
-      </div>
-    </div>
-    <div class="card">
-      <h2>说明</h2>
-      <div class="hint">
-        · 当前运行：<b>${MODE === "server" ? "服务器模式（连本机服务，流式输出）" : "离线模式（App 内引擎，直连 AI）"}</b><br>
-        · <b>GLM 智谱（Coding Plan）</b>：到 open.bigmodel.cn 用<b>开通了 Coding Plan 的账号</b>创建「Coding Plan 类型」API Key 粘贴到上方；个人类型 Key 会报 429 余额不足。模型默认 glm-5.3，建议保持开启「快速模式」。<br>
-        · 判定依据：时薪换算、吃灰概率、家里已有类似物、商家话术、分期利息成本、二手残值。三档结论（拔草/冷静/放行）都会真实出现。<br>
-        · 附购物截图时用「识图模型」判定（默认 glm-4.5v）：AI 会拆解截图里的价格、优惠与话术；截图与手填价格冲突以截图为准。截图自动压缩，台账只存缩略图。<br>
-        · 本工具为娱乐性理性消费辅助，判定由 AI 生成仅供参考，请根据自己的实际财务状况决策。禁止极端抠门，该买的刚需要放行。<br>
-        · 数据（工资、台账）只保存在本机${MODE === "server" ? "（data/ 目录）" : "（浏览器本地存储）"}。
       </div>
     </div>
   </section>`;
