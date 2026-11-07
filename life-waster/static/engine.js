@@ -173,10 +173,10 @@ function hoursText(hours) {
   return fmtNum(h) + " 小时";
 }
 
-function lifeShareText(hours, profile, ledger) {
+function lifeShareText(hours, profile, ledger, now) {
   const h = Number(hours);
   if (!isFinite(h) || h <= 0) return "";
-  const st = lifeStats(profile, ledger);
+  const st = lifeStats(profile, ledger, now);
   const parts = [];
   if (st.ready && st.remain_days > 0) {
     const pct = h / (st.remain_days * 24) * 100;

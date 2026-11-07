@@ -213,7 +213,7 @@ def hours_text(hours):
     return _fmt_num(h) + " 小时"
 
 
-def life_share_text(hours, profile, ledger=None):
+def life_share_text(hours, profile, ledger=None, now=None):
     """把这段时长换算成生命刻度文案（「这段时光≈余生的 X%」「若每周来 3 次，一年≈X 天」）。"""
     try:
         h = float(hours)
@@ -221,7 +221,7 @@ def life_share_text(hours, profile, ledger=None):
         return ""
     if h <= 0:
         return ""
-    st = life_stats(profile, ledger)
+    st = life_stats(profile, ledger, now=now)
     parts = []
     if st["ready"] and st["remain_days"] > 0:
         pct = h / (st["remain_days"] * 24) * 100

@@ -3,8 +3,8 @@
 # 自带工具链校验：强制使用 tools/ 内的 JDK 21，清掉旧 daemon，不受系统 Java/环境变量干扰。
 set -e
 cd "$(dirname "$0")"
-export JAVA_HOME="$PWD/../tools/amazon-corretto-21.jdk/Contents/Home"
-export ANDROID_HOME="$PWD/../tools/android-sdk"
+export JAVA_HOME="${LW_TOOLS_DIR:-$PWD/../../tools}/amazon-corretto-21.jdk/Contents/Home"
+export ANDROID_HOME="${LW_TOOLS_DIR:-$PWD/../../tools}/android-sdk"
 
 # 1) 工具链自检：JDK 必须 ≥ 21（Capacitor 7.4 要求），SDK 目录必须存在
 if [ ! -x "$JAVA_HOME/bin/java" ]; then
